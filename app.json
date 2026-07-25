@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "npm-user-tracker",
+    "slug": "npm-user-tracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      }
+    }
+  }
+}
