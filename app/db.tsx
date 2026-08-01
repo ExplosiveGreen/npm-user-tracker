@@ -6,7 +6,7 @@ import {
 } from '@/components/ui/card';
 import { Text } from '@/components/ui/text';
 
-import * as schema from '../../db/schema';
+import * as schema from '../db/schema';
 import { getTableConfig } from 'drizzle-orm/sqlite-core';
 import { useMemo } from 'react';
 import { ScrollView } from 'react-native';

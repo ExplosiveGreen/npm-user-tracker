@@ -1,3 +1,5 @@
+import { DarkTheme, DefaultTheme, type Theme } from 'expo-router/react-navigation';
+
 export const THEME = {
   light: {
     background: 'hsl(0 0% 100%)',
@@ -53,28 +55,27 @@ export const THEME = {
   },
 };
 
-/** Navigation theme tokens for React Navigation / Expo Router. */
-export const NAV_THEME = {
+export const NAV_THEME: Record<'light' | 'dark', Theme> = {
   light: {
-    dark: false,
+    ...DefaultTheme,
     colors: {
-      primary: THEME.light.primary,
       background: THEME.light.background,
-      card: THEME.light.card,
-      text: THEME.light.foreground,
       border: THEME.light.border,
+      card: THEME.light.card,
       notification: THEME.light.destructive,
+      primary: THEME.light.primary,
+      text: THEME.light.foreground,
     },
   },
   dark: {
-    dark: true,
+    ...DarkTheme,
     colors: {
-      primary: THEME.dark.primary,
       background: THEME.dark.background,
-      card: THEME.dark.card,
-      text: THEME.dark.foreground,
       border: THEME.dark.border,
+      card: THEME.dark.card,
       notification: THEME.dark.destructive,
+      primary: THEME.dark.primary,
+      text: THEME.dark.foreground,
     },
   },
-} as const;
+};

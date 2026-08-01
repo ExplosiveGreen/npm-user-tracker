@@ -1,4 +1,5 @@
 import '@/global.css';
+import { PortalHost } from '@rn-primitives/portal';
 import { Text } from '@/components/ui/text';
 import { runMigrations } from '@/db/migrate';
 import { Stack } from 'expo-router';
@@ -10,7 +11,6 @@ export default function RootLayout() {
   if (error) {
     return (
       <View>
-        <Text></Text>
         <Text>{error.name}</Text>
         <Text>Migration error: {error.message}</Text>
         <Text>{`${error.cause}`}</Text>
@@ -26,5 +26,11 @@ export default function RootLayout() {
       </View>
     );
   }
-  return <Stack/>
+
+  return (
+    <>
+      <Stack />
+      <PortalHost />
+    </>
+  );
 }
