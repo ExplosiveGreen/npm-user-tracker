@@ -1,10 +1,14 @@
 {
   "expo": {
-    "name": "npm-user-tracker",
+    "name": "npm user tracker",
     "slug": "npm-user-tracker",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "scheme": "mynpm",
+    "experiments": {
+      "typedRoutes": true
+    },
     "ios": {
       "supportsTablet": true
     },
@@ -14,7 +18,9 @@
       }
     },
     "plugins": [
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-router",
+      "expo-status-bar"
     ]
   }
 }
