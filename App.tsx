@@ -14,6 +14,10 @@ import { StatusBar } from 'expo-status-bar';
 import { ScrollView, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
+import { getTableColumns } from 'drizzle-orm';
+import { npmUsers } from './db/schema';
+import { runMigrations } from './db/migrate';
+
 const SAMPLE_PACKAGES = [
   {
     name: 'react',
@@ -36,6 +40,29 @@ const SAMPLE_PACKAGES = [
 ];
 
 export default function App() {
+  const { success, error } = runMigrations();
+  const columns = Object.keys(getTableColumns(npmUsers));
+
+  if (error) {
+    return (
+      <View>
+        <Text></Text>
+        <Text>{error.name}</Text>
+        <Text>Migration error: {error.message}</Text>
+        <Text>{`${error.cause}`}</Text>
+        <Text>{error.stack}</Text>
+      </View>
+    );
+  }
+
+  if (!success) {
+    return (
+      <View>
+        <Text>Migration is in progress...</Text>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaProvider>
       <SafeAreaView className="bg-background flex-1">
@@ -51,6 +78,17 @@ export default function App() {
               Track packages and download trends. Cards below use React Native Reusables.
             </Text>
           </View>
+
+          <Card key={"npm_user_columns"} className="w-full">
+            <CardHeader>
+              <CardTitle>{"npm_user_columns"}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {columns.map((col)=> <Text key={col}>
+                {col}
+              </Text>)}
+            </CardContent>
+          </Card>
 
           {SAMPLE_PACKAGES.map((pkg) => (
             <Card key={pkg.name} className="w-full">
