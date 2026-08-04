@@ -50,5 +50,6 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate"
   },
-  "private": true
+  "private": true,
+  "packageManager":"pnpm@11.13.1"
 }
