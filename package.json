@@ -3,7 +3,7 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "dependencies": {
-    "@expo/ui": "~57.0.8",
+    "@expo/ui": "~57.0.9",
     "@op-engineering/op-sqlite": "^17.1.4",
     "@rn-primitives/label": "^1.5.2",
     "@rn-primitives/portal": "^1.5.2",
@@ -14,14 +14,14 @@
     "@tanstack/react-native-db-sqlite-persistence": "^0.2.9",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "expo": "~57.0.9",
-    "expo-constants": "~57.0.8",
+    "expo": "~57.0.10",
+    "expo-constants": "~57.0.9",
     "expo-device": "~57.0.1",
     "expo-font": "~57.0.1",
     "expo-glass-effect": "~57.0.1",
-    "expo-image": "~57.0.1",
-    "expo-linking": "~57.0.4",
-    "expo-router": "~57.0.9",
+    "expo-image": "~57.0.2",
+    "expo-linking": "~57.0.5",
+    "expo-router": "~57.0.10",
     "expo-splash-screen": "~57.0.5",
     "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.1",
@@ -48,7 +48,8 @@
   },
   "scripts": {
     "start": "expo start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "doctor": "bunx expo-doctor"
   },
   "private": true,
   "packageManager": "pnpm@11.13.1"
