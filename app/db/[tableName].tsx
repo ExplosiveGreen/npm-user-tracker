@@ -6,35 +6,38 @@ import {
 } from '@/components/ui/card';
 import { Text } from '@/components/ui/text';
 
-import * as schema from '../../db/schema';
+import { dbTables } from '@/db';
 import { ScrollView, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useGlobalSearchParams } from 'expo-router';
-import { useQuery } from "@tanstack/react-query"
-import { getTableConfig } from 'drizzle-orm/sqlite-core';
-import { db } from '@/db';
+import { useLiveQuery } from '@tanstack/react-db';
 
 export default function TableScreen() {
   const { tableName } = useGlobalSearchParams();
-  const table = Object.values(schema).find(t => getTableConfig(t).name == tableName)
-  const { data, error, isPending } = useQuery({
-    queryKey: [`${tableName}Data`],
-    queryFn: async () => table && await db.select().from(table),
-  })
+  const table = dbTables.find((t) => t.name === tableName);
 
-  if (error) {
+  const { data, isError, isReady } = useLiveQuery(
+    (q) => (table ? q.from({ row: table.collection }) : undefined),
+  );
+
+  if (!table) {
     return (
       <View>
-        <Text>{error.name}</Text>
-        <Text>DB error: {error.message}</Text>
-        <Text>{`${error.cause}`}</Text>
-        <Text>{error.stack}</Text>
+        <Text>Unknown table</Text>
       </View>
     );
   }
 
-  if (isPending) {
+  if (isError) {
+    return (
+      <View>
+        <Text>Failed to load {tableName}</Text>
+      </View>
+    );
+  }
+
+  if (!isReady) {
     return (
       <View>
         <Text>fetching is in progress...</Text>
@@ -52,13 +55,17 @@ export default function TableScreen() {
             contentContainerClassName="gap-4 p-4 pb-8"
             showsVerticalScrollIndicator={false}
           >
-            {data && data.map((item) => <Card className='w-full'>
-              <CardContent>
-                {Object.entries(item).map(([k, v]) => (
-                  <Text key={k}>{`${k} : ${v}`}</Text>
-                ))}
-              </CardContent>
-            </Card>)}
+            {data?.map((item, i) => (
+              <Card key={i} className="w-full">
+                <CardHeader>
+                  <CardTitle>#{String(i + 1)}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {Object.entries(item).map(([k, v]) => (
+                    <Text key={k}>{`${k} : ${String(v)}`}</Text>))}
+                </CardContent>
+              </Card>
+            ))}
           </ScrollView>
         </SafeAreaView>
       </SafeAreaProvider>

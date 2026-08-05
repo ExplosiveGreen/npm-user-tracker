@@ -5,25 +5,13 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Text } from '@/components/ui/text';
-
-import * as schema from '../../db/schema';
-import { getTableConfig } from 'drizzle-orm/sqlite-core';
-import { useMemo } from 'react';
+import { dbTables } from '@/db';
 import { ScrollView } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Link, Stack } from 'expo-router';
 
 export default function DbScreen() {
-
-  const tables = useMemo(() => Object.values(schema).map(table => {
-    const { name, columns } = getTableConfig(table);
-    return {
-      name,
-      columns: columns.map(col => col.name)
-    }
-  }), [schema])
-
   return (
     <Stack.Screen options={{ title: "db" }}>
       <SafeAreaProvider>
@@ -34,14 +22,14 @@ export default function DbScreen() {
             contentContainerClassName="gap-4 p-4 pb-8"
             showsVerticalScrollIndicator={false}
           >
-            {tables.map(({ name, columns }) => (
-              <Link href={`/db/${name}`}>
-                <Card key={name} className="w-full">
+            {dbTables.map(({ name, columns }) => (
+              <Link key={name} href={`/db/${name}`}>
+                <Card className="w-full">
                   <CardHeader>
                     <CardTitle>{name}</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    {columns.map(col => (
+                    {columns.map((col) => (
                       <Text key={col}>{col}</Text>
                     ))}
                   </CardContent>

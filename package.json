@@ -4,15 +4,16 @@
   "version": "1.0.0",
   "dependencies": {
     "@expo/ui": "~57.0.8",
+    "@op-engineering/op-sqlite": "^17.1.4",
     "@rn-primitives/label": "^1.5.2",
     "@rn-primitives/portal": "^1.5.2",
     "@rn-primitives/slot": "^1.5.2",
     "@rn-primitives/switch": "^1.5.2",
-    "@tanstack/react-query": "^5.101.4",
-    "babel-plugin-inline-import": "^3.0.0",
+    "@tanstack/db": "^0.6.17",
+    "@tanstack/react-db": "^0.1.95",
+    "@tanstack/react-native-db-sqlite-persistence": "^0.2.9",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "drizzle-orm": "0.45.2",
     "expo": "~57.0.9",
     "expo-constants": "~57.0.8",
     "expo-device": "~57.0.1",
@@ -22,7 +23,6 @@
     "expo-linking": "~57.0.4",
     "expo-router": "~57.0.9",
     "expo-splash-screen": "~57.0.5",
-    "expo-sqlite": "~57.0.1",
     "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.1",
     "expo-system-ui": "~57.0.2",
@@ -39,19 +39,16 @@
     "react-native-web": "~0.21.0",
     "react-native-worklets": "0.10.1",
     "tailwind-merge": "^3.6.0",
-    "tailwindcss-animate": "^1.0.7",
-    "uuid": "^14.0.1"
+    "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
-    "drizzle-kit": "0.31.10",
     "tailwindcss": "^3.4.19",
     "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start",
-    "typecheck": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate"
+    "typecheck": "tsc --noEmit"
   },
   "private": true,
   "packageManager": "pnpm@11.13.1"

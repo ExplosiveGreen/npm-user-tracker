@@ -5,9 +5,6 @@ const { withNativeWind } = require('nativewind/metro');
 /** @type {import('expo/metro-config').MetroConfig} */
 let config = getDefaultConfig(__dirname);
 
-config.resolver.sourceExts.push('sql');
-config.resolver.assetExts.push('wasm');
-
 config = getBundleModeMetroConfig(config);
 
 module.exports = withNativeWind(config, { input: './global.css', inlineRem: 16 });
