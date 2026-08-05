@@ -8,6 +8,7 @@ import { npmUsersCollection } from '@/db';
 import { useState } from 'react';
 import { ScrollView, Switch } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { Link } from 'expo-router';
 
 export default function Index() {
   const [username, setUsername] = useState("");
@@ -57,6 +58,7 @@ export default function Index() {
               </CardContent>
             </Card>
           ))}
+          <Link href={'/db'}>go to db page</Link>
         </ScrollView>
       </SafeAreaView>
     </SafeAreaProvider>
