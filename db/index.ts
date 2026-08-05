@@ -1,26 +1,23 @@
-import { open } from '@op-engineering/op-sqlite';
-import type { Scalar } from '@op-engineering/op-sqlite';
+import { openDatabaseSync } from 'expo-sqlite';
 import { createCollection } from '@tanstack/db';
 import type { Collection, UtilsRecord } from '@tanstack/db';
 import {
-  createReactNativeSQLitePersistence,
+  createExpoSQLitePersistence,
   persistedCollectionOptions,
-} from '@tanstack/react-native-db-sqlite-persistence';
+} from '@tanstack/expo-db-sqlite-persistence';
+import type { ExpoSQLiteDatabaseLike } from '@tanstack/expo-db-sqlite-persistence';
 
 // Local SQLite-backed persistence shared by every collection below. The database
 // is opened once and reused across the whole app runtime (and across app restarts),
 // which is what makes the data durable on-device.
-const database = open({
-  name: 'npm-user-tracker.sqlite',
-  location: 'default',
-});
+const database = openDatabaseSync('npm-user-tracker.db');
 
-const persistence = createReactNativeSQLitePersistence({
-  database: {
-    execute: (sql, params) =>
-      database.execute(sql, params as Scalar[] | undefined),
-    close: () => database.close(),
-  },
+// tanstack's Expo adapter expects `ExpoSQLiteDatabaseLike` (execAsync/getAllAsync/
+// runAsync/withExclusiveTransactionAsync/closeAsync), which expo-sqlite's
+// `SQLiteDatabase` already provides. The cast is only needed because the adapter's
+// typing is slightly looser about params/return generics than expo-sqlite's.
+const persistence = createExpoSQLitePersistence({
+  database: database as unknown as ExpoSQLiteDatabaseLike,
 });
 
 export type NpmUser = {
