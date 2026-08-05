@@ -4,6 +4,9 @@ import { Text } from '@/components/ui/text';
 import { runMigrations } from '@/db/migrate';
 import { Stack } from 'expo-router';
 import { View } from 'react-native';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+const queryClient = new QueryClient()
 
 export default function RootLayout() {
   const { success, error } = runMigrations();
@@ -28,9 +31,9 @@ export default function RootLayout() {
   }
 
   return (
-    <>
+    <QueryClientProvider client={queryClient}>
       <Stack />
       <PortalHost />
-    </>
+    </QueryClientProvider>
   );
 }
