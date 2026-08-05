@@ -14,34 +14,33 @@ import { Stack, useGlobalSearchParams } from 'expo-router';
 import { useQuery } from "@tanstack/react-query"
 import { getTableConfig } from 'drizzle-orm/sqlite-core';
 import { db } from '@/db';
-import DataView from '@/components/DataView';
 
 export default function TableScreen() {
   const { tableName } = useGlobalSearchParams();
   const table = Object.values(schema).find(t => getTableConfig(t).name == tableName)
   const { data, error, isPending } = useQuery({
-    queryKey: ['tableData'],
+    queryKey: [`${tableName}Data`],
     queryFn: async () => table && await db.select().from(table),
   })
 
-    if (error) {
-      return (
-        <View>
-          <Text>{error.name}</Text>
-          <Text>DB error: {error.message}</Text>
-          <Text>{`${error.cause}`}</Text>
-          <Text>{error.stack}</Text>
-        </View>
-      );
-    }
-  
-    if (isPending) {
-      return (
-        <View>
-          <Text>fetching is in progress...</Text>
-        </View>
-      );
-    }
+  if (error) {
+    return (
+      <View>
+        <Text>{error.name}</Text>
+        <Text>DB error: {error.message}</Text>
+        <Text>{`${error.cause}`}</Text>
+        <Text>{error.stack}</Text>
+      </View>
+    );
+  }
+
+  if (isPending) {
+    return (
+      <View>
+        <Text>fetching is in progress...</Text>
+      </View>
+    );
+  }
 
   return (
     <Stack.Screen options={{ title: `db/${tableName}` }}>
@@ -53,7 +52,13 @@ export default function TableScreen() {
             contentContainerClassName="gap-4 p-4 pb-8"
             showsVerticalScrollIndicator={false}
           >
-            {data && data.map((item) => <DataView data={item}/>)}
+            {data && data.map((item) => <Card className='w-full'>
+              <CardContent>
+                {Object.entries(item).map(([k, v]) => (
+                  <Text key={k}>{`${k} : ${v}`}</Text>
+                ))}
+              </CardContent>
+            </Card>)}
           </ScrollView>
         </SafeAreaView>
       </SafeAreaProvider>
