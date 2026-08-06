@@ -36,7 +36,8 @@
           "imageWidth": 76
         }
       ],
-      "expo-image"
+      "expo-image",
+      "expo-background-task"
     ],
     "experiments": {
       "typedRoutes": true

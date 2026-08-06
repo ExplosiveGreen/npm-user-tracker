@@ -92,6 +92,23 @@ export type PackageVersion = {
   date: string;
 };
 
+export type JobStatus = 'queued' | 'running' | 'success' | 'failed' | 'no-data';
+
+// Tracks the work of every background scan run against an npm user. The app
+// observes this collection to render live per-job status (running/failed/etc.)
+// and to drive retry / delete-user feedback actions.
+export type Job = {
+  id: string;
+  npmUserId: string;
+  status: JobStatus;
+  error: string | null;
+  authorTotal: number;
+  maintainerTotal: number;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
 export const npmUsersCollection = createCollection(
   persistedCollectionOptions<NpmUser, string>({
     id: 'npm-users',
@@ -173,6 +190,15 @@ export const packageVersionsCollection = createCollection<PackageVersion, string
   }),
 );
 
+export const jobsCollection = createCollection<Job, string>(
+  persistedCollectionOptions<Job, string>({
+    id: 'jobs',
+    getKey: (job) => job.id,
+    persistence,
+    schemaVersion: 1,
+  }),
+);
+
 // Registry of persisted collections used to render the DB explorer screens. The
 // collection is stored loosely so the screens can render arbitrary rows.
 export type DbTable = {
@@ -233,5 +259,13 @@ export const dbTables: DbTable[] = [
     name: 'package_versions',
     columns: ['packageId', 'version', 'date'],
     collection: packageVersionsCollection as unknown as DbTable['collection'],
+  },
+  {
+    name: 'jobs',
+    columns: [
+      'id', 'npmUserId', 'status', 'error', 'authorTotal', 'maintainerTotal',
+      'createdAt', 'startedAt', 'finishedAt',
+    ],
+    collection: jobsCollection as unknown as DbTable['collection'],
   },
 ];
