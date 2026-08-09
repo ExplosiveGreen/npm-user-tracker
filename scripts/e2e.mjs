@@ -55,6 +55,23 @@ function ensurePortForward() {
   }
 }
 
+// Expo Go shows the app by loading the JS bundle from Metro; without a running
+// dev server the app never gets to the home screen. Fail with guidance early
+// instead of letting the flows time out.
+async function requireMetro() {
+  try {
+    const res = await fetch('http://localhost:8081/status', {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok && (await res.text()).includes('running')) return;
+  } catch {
+    // fall through to the error below
+  }
+  console.error('ERROR: Metro dev server is not reachable on port 8081.');
+  console.error('Start it with `npx expo start --port 8081` and try again.');
+  process.exit(1);
+}
+
 // Expo Go must be present for the flows; download and install it otherwise.
 async function ensureExpoGo() {
   const check = tryRun(ADB, ['shell', 'pm', 'path', EXPO_GO_PKG]);
@@ -100,6 +117,7 @@ function cleanup() {
 }
 
 requireDevice();
+await requireMetro();
 ensurePortForward();
 
 let failed = false;
