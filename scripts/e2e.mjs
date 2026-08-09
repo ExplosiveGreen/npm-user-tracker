@@ -6,7 +6,7 @@
 // the network toggles cannot live in Maestro flows (it has no shell) so they
 // live here with the flows split around them.
 import { spawnSync } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -60,12 +60,24 @@ async function ensureExpoGo() {
   const check = tryRun(ADB, ['shell', 'pm', 'path', EXPO_GO_PKG]);
   if (check.ok && check.stdout.includes('package:')) return;
   console.log('Expo Go not found, downloading...');
+
+  // Match Expo Go to the project's SDK (read from the installed expo package)
+  // so it can actually load the app rather than downloading a legacy client.
+  const expoPkg = JSON.parse(
+    await readFile(path.join(process.cwd(), 'node_modules', 'expo', 'package.json'), 'utf8'),
+  );
+  const sdkMajor = Number(expoPkg.version.split('.')[0]);
+
   const versions = await fetch('https://api.expo.dev/v2/versions/latest').then((r) => {
     if (!r.ok) throw new Error(`Expo versions API returned ${r.status}`);
     return r.json();
   });
-  const apkUrl = versions?.androidClientUrl;
-  if (!apkUrl) throw new Error('No Expo Go APK URL in Expo versions API.');
+  const sdkEntry = Object.entries(versions?.data?.sdkVersions ?? {})
+    .filter(([key]) => key.startsWith(`${sdkMajor}.`))
+    .sort()
+    .pop()?.[1];
+  const apkUrl = sdkEntry?.androidClientUrl;
+  if (!apkUrl) throw new Error(`No Expo Go APK URL for SDK ${sdkMajor} in Expo versions API.`);
   const apkPath = path.join(os.tmpdir(), 'expo-go.apk');
   const apk = await fetch(apkUrl).then((r) => {
     if (!r.ok) throw new Error(`Expo Go download returned ${r.status}`);
