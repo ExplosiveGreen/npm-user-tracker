@@ -1,5 +1,5 @@
 import { safeRandomUUID } from '@tanstack/db';
-import type { ObjectsEntity, scanResult } from '@/types';
+import type { ObjectsEntity, PackageInfo, scanResult } from '@/types';
 import {
   jobsCollection,
   npmUsersCollection,
@@ -7,6 +7,7 @@ import {
   packagesCollection,
   packageMaintainersCollection,
   packageKeywordsCollection,
+  packageVersionsCollection,
   scanPackagesCollection,
   flagsCollection,
   packageFlagsCollection,
@@ -77,9 +78,13 @@ const upsert = <T extends object>(
 };
 
 // Packages are keyed by their unique npm name, so re-scanning a user upserts
-// instead of duplicating rows. Returns the package id, which equals the name.
-const upsertPackage = (object: ObjectsEntity): string => {
+// instead of duplicating rows. Returns the package id (the name) and whether the
+// package is new or its version changed since the last scan, so the caller can
+// refresh the tracked version history.
+const upsertPackage = (object: ObjectsEntity): { id: string; versionChanged: boolean } => {
   const pkg = object.package;
+  const existing = packagesCollection.get(pkg.name);
+  const versionChanged = !existing || existing.version !== pkg.version;
   upsert(
     packagesCollection,
     pkg.name,
@@ -99,7 +104,25 @@ const upsertPackage = (object: ObjectsEntity): string => {
       publisherId: pkg.publisher?.username ?? null,
     },
   );
-  return pkg.name;
+  return { id: pkg.name, versionChanged };
+};
+
+// Fetches the full metadata for one package and records the release date of every
+// published version in package_versions. `created` and `modified` are registry
+// bookkeeping timestamps, not versions, so they are skipped. Versions are upserted
+// so overlapping author/maintainer scans and re-scans only fill in missing rows.
+const syncPackageVersions = async (packageId: string): Promise<void> => {
+  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageId)}`);
+  if (!response.ok) {
+    throw new Error(`fetching versions for "${packageId}" failed with status ${response.status}`);
+  }
+  const { time } = (await response.json()) as PackageInfo;
+  if (!time) return;
+  await packageVersionsCollection.preload();
+  for (const [version, date] of Object.entries(time)) {
+    if (version === 'created' || version === 'modified') continue;
+    upsert(packageVersionsCollection, `${packageId}/${version}`, { packageId, version, date });
+  }
 };
 
 // Upserts the `insecure` flag used by the package-flags join.
@@ -126,7 +149,11 @@ const persistScan = async (npmUserId: string, scan: scanResult): Promise<void> =
   const byUsername = await loadUsersByUsername();
 
   for (const object of scan.objects) {
-    const packageId = upsertPackage(object);
+    const { id: packageId, versionChanged } = upsertPackage(object);
+
+    if (versionChanged) {
+      await syncPackageVersions(packageId);
+    }
 
     const scanPackageId = safeRandomUUID();
     scanPackagesCollection.insert({
