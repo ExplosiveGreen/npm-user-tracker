@@ -147,6 +147,9 @@ try {
   sleep(3000);
   maestro('online-retry.yaml');
 
+  console.log('== Table screen: delete a row ==');
+  maestro('table-delete.yaml');
+
   console.log('== Theme: pin dark over a light OS, then release ==');
   setNightMode('no');
   maestro('theme-toggle.yaml');

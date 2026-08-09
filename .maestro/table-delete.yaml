@@ -1,0 +1,16 @@
+appId: host.exp.exponent
+name: table-delete-removes-row
+---
+# Run after online-retry.yaml, which leaves a single npm user (instafluff)
+# persisted. Deep-link to the npm_users table screen and use the Delete button
+# on the row's card; the row must disappear from the rendered list.
+- openLink: exp://127.0.0.1:8081/--/db/npm_users
+- extendedWaitUntil:
+    visible: "username : instafluff"
+    timeout: 15000
+
+- tapOn:
+    id: "delete-row"
+- assertVisible: "Delete row"
+- tapOn: "Delete"
+- assertNotVisible: "username : instafluff"

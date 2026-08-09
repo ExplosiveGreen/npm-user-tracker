@@ -33,15 +33,35 @@ name: theme-follows-system-and-pins-override
     enabled: true
 
 # Flip off: target (dark -> light) differs from the dark OS, so light is pinned
-# (an informed override), not released.
-- tapOn:
-    id: "dark-mode-switch"
+# (an informed override), not released. Dev-menu self-healing as in theme-toggle.
+- repeat:
+    while:
+      notVisible: "Set to light"
+    times: 3
+    commands:
+      - tapOn:
+          id: "dark-mode-switch"
+      - runFlow:
+          when:
+            visible: "Go home"
+          commands:
+            - back
 - assertVisible: "Set to light"
 - assertVisible: "^Dark$"
 
 # Flip back on: target (light -> dark) matches the dark OS again, so the pin
 # is released and the page returns to following the system.
-- tapOn:
-    id: "dark-mode-switch"
+- repeat:
+    while:
+      notVisible: "Following system \\(dark\\)"
+    times: 3
+    commands:
+      - tapOn:
+          id: "dark-mode-switch"
+      - runFlow:
+          when:
+            visible: "Go home"
+          commands:
+            - back
 - assertVisible: "Following system \\(dark\\)"
 - assertVisible: "^Light$"
