@@ -173,7 +173,11 @@ export default function Index() {
               </Card>
             );
           })}
-          <Link href={'/db'}>go to db page</Link>
+          <Link asChild href={'/db'}>
+            <Button testID="db-link" variant="link">
+              <Text>go to db page</Text>
+            </Button>
+          </Link>
         </ScrollView>
       </SafeAreaView>
     </SafeAreaProvider>

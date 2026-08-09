@@ -1,0 +1,36 @@
+appId: host.exp.exponent
+name: offline-add-shows-retry
+---
+# Run while the device network is disabled (done from scripts/e2e.sh before
+# invoking this flow): a real username is added and the scan fetch fails, so the
+# job surfaces the retry button. Starts from a clean Expo Go state (empty DB).
+- launchApp:
+    clearState: true
+- openLink: exp://127.0.0.1:8081
+# Dismiss Expo Go's first-launch dev-menu onboarding if it appears, then close
+# the dev menu sheet that follows it so the app content is reachable.
+- tapOn:
+    text: "Continue"
+    optional: true
+- runFlow:
+    when:
+      visible: "Go home"
+    commands:
+      - back
+- extendedWaitUntil:
+    visible:
+      id: "username-input"
+    timeout: 120000
+
+- tapOn:
+    id: "username-input"
+- inputText: "instafluff"
+- tapOn:
+    id: "add-user"
+
+# The fetch fails, so the job errors and offers a retry.
+- extendedWaitUntil:
+    visible:
+      id: "retry-scan"
+    timeout: 45000
+- assertVisible: "Scan failed for instafluff.*"
