@@ -1,31 +1,20 @@
 import '@/global.css';
+import "react-native-random-uuid";
 import { PortalHost } from '@rn-primitives/portal';
-import { Text } from '@/components/ui/text';
-import { runMigrations } from '@/db/migrate';
 import { Stack } from 'expo-router';
-import { View } from 'react-native';
+import { useEffect } from 'react';
+import { Platform } from 'react-native';
+import { registerTaskAsync } from 'expo-background-task';
+import '@/lib/tasks';
+import { SCAN_TASK_NAME } from '@/lib/tasks';
 
 export default function RootLayout() {
-  const { success, error } = runMigrations();
-
-  if (error) {
-    return (
-      <View>
-        <Text>{error.name}</Text>
-        <Text>Migration error: {error.message}</Text>
-        <Text>{`${error.cause}`}</Text>
-        <Text>{error.stack}</Text>
-      </View>
-    );
-  }
-
-  if (!success) {
-    return (
-      <View>
-        <Text>Migration is in progress...</Text>
-      </View>
-    );
-  }
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    registerTaskAsync(SCAN_TASK_NAME, {}).catch((error) => {
+      console.warn('Background task registration skipped', error);
+    });
+  }, []);
 
   return (
     <>
