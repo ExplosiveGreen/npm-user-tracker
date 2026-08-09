@@ -1,0 +1,55 @@
+appId: com.anonymous.npmusertracker
+name: offline-retry-populates-tables
+---
+# Starts from a clean install (empty DB) to mirror the manual clean-slate test.
+# Requires an Android emulator: the network is toggled via adb.
+- launchApp:
+    clearState: true
+
+# Take the emulator offline so the scan fetch fails.
+- runScript: adb shell svc wifi disable; adb shell svc data disable
+
+# Add a real username while offline.
+- tapOn:
+    id: "username-input"
+- inputText: "sindresorhus"
+- tapOn:
+    id: "add-user"
+
+# The fetch fails, so the job errors and offers a retry.
+- extendedWaitUntil:
+    visible:
+      id: "retry-scan"
+    timeout: 45000
+- assertVisible: "Scan failed for sindresorhus"
+
+# Restore the network and retry the same job.
+- runScript: adb shell svc wifi enable; adb shell svc data enable
+- tapOn:
+    id: "retry-scan"
+- extendedWaitUntil:
+    visible: "Done: sindresorhus"
+    timeout: 90000
+
+# Verify every table was populated with scan results.
+- tapOn: "go to db page"
+- tapOn: "npm_users"
+- assertVisible: "sindresorhus"
+- back
+
+- tapOn: "packages"
+- assertVisible: "name : chalk"
+- back
+
+# package_versions is only written by the version-sync feature, so its presence
+# proves release history was fetched from the registry.
+- tapOn: "package_versions"
+- assertVisible: "packageId : chalk"
+- back
+
+- tapOn: "scans"
+- assertVisible: "type : author"
+- back
+
+- tapOn: "jobs"
+- assertVisible: "status : success"

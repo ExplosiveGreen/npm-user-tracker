@@ -131,20 +131,20 @@ export default function Index() {
                 <Text>{jobLabel(job, usernameOf(job))}</Text>
               </View>
               {job.status === 'failed' && (
-                <Button variant="outline" onPress={() => retryJob(job)}>
+                <Button testID="retry-scan" variant="outline" onPress={() => retryJob(job)}>
                   <Text>Retry scan</Text>
                 </Button>
               )}
               {job.status === 'no-data' && (
-                <Button variant="destructive" onPress={() => promptDeleteUser(job)}>
+                <Button testID="delete-user-button" variant="destructive" onPress={() => promptDeleteUser(job)}>
                   <Text>This user may not exist — delete?</Text>
                 </Button>
               )}
             </View>
           ))}
         </View>
-        <Input onChangeText={setUsername} value={username} placeholder='username' />
-        <Button onPress={addUser} className="my-2">
+        <Input testID="username-input" onChangeText={setUsername} value={username} placeholder='username' />
+        <Button testID="add-user" onPress={addUser} className="my-2">
           <Text>Add user</Text>
         </Button>
         <ScrollView

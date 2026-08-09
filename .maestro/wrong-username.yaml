@@ -1,0 +1,28 @@
+appId: com.anonymous.npmusertracker
+name: wrong-username-deletes-user
+---
+# Starts from a clean install (empty DB) to mirror the manual clean-slate test.
+- launchApp:
+    clearState: true
+
+# Enter a username that is not real and run the scan.
+- tapOn:
+    id: "username-input"
+- inputText: "~t3dotgg"
+- tapOn:
+    id: "add-user"
+
+# The registry returns no packages, so the job is flagged with the
+# "this user may not exist" prompt.
+- extendedWaitUntil:
+    visible:
+      id: "delete-user-button"
+    timeout: 45000
+- assertVisible: "No npm packages found for ~t3dotgg."
+
+# Confirm deletion removes the user from the list.
+- tapOn:
+    id: "delete-user-button"
+- assertVisible: "This user might not exist"
+- tapOn: "Delete user"
+- assertNotVisible: "~t3dotgg"

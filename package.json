@@ -52,7 +52,8 @@
   "scripts": {
     "start": "expo start",
     "typecheck": "tsc --noEmit",
-    "doctor": "bunx expo-doctor"
+    "doctor": "bunx expo-doctor",
+    "test:e2e": "maestro test .maestro"
   },
   "private": true,
   "packageManager": "pnpm@11.13.1"
