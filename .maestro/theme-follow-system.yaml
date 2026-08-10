@@ -1,0 +1,67 @@
+appId: host.exp.exponent
+name: theme-follows-system-and-pins-override
+---
+# Runs with the device OS in DARK mode (forced by scripts/e2e.mjs via
+# `adb shell cmd uimode night yes` before this flow). Fresh Expo Go state, no
+# stored preference, so the page follows the dark OS. Also covers the reverse
+# direction: pinning LIGHT over a dark system (an informed override rather than
+# a release) and then releasing it back.
+- launchApp:
+    clearState: true
+- openLink: exp://127.0.0.1:8081
+# Dismiss Expo Go's first-launch dev-menu onboarding if it appears, then close
+# the dev menu sheet that follows it so the app content is reachable.
+- tapOn:
+    text: "Continue"
+    optional: true
+- runFlow:
+    when:
+      visible: "Go home"
+    commands:
+      - back
+- extendedWaitUntil:
+    visible:
+      id: "username-input"
+    timeout: 120000
+
+# Fresh install: no stored override, page follows the dark OS, strong theme on.
+- assertVisible: "Dark mode"
+- assertVisible: "Following system \\(dark\\)"
+- assertVisible: "^Light$"
+- assertVisible:
+    id: "dark-mode-switch"
+    enabled: true
+
+# Flip off: target (dark -> light) differs from the dark OS, so light is pinned
+# (an informed override), not released. Dev-menu self-healing as in theme-toggle.
+- repeat:
+    while:
+      notVisible: "Set to light"
+    times: 3
+    commands:
+      - tapOn:
+          id: "dark-mode-switch"
+      - runFlow:
+          when:
+            visible: "Go home"
+          commands:
+            - back
+- assertVisible: "Set to light"
+- assertVisible: "^Dark$"
+
+# Flip back on: target (light -> dark) matches the dark OS again, so the pin
+# is released and the page returns to following the system.
+- repeat:
+    while:
+      notVisible: "Following system \\(dark\\)"
+    times: 3
+    commands:
+      - tapOn:
+          id: "dark-mode-switch"
+      - runFlow:
+          when:
+            visible: "Go home"
+          commands:
+            - back
+- assertVisible: "Following system \\(dark\\)"
+- assertVisible: "^Light$"
