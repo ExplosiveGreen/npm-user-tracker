@@ -32,6 +32,12 @@ function tryRun(cmd, args) {
 
 const maestro = (flow) => run('maestro', ['test', path.join(FLOWS, flow)]);
 
+// Force the emulator into a known light/dark mode; the theme flows assert on
+// the "Following system" label, which is only deterministic with a known OS.
+function setNightMode(mode) {
+  adb('shell', 'cmd', 'uimode', 'night', mode); // yes | no | auto
+}
+
 // Block the main thread briefly; a SharedArrayBuffer is only used to sleep.
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -112,6 +118,8 @@ function cleanup() {
   // The offline flow can crash mid-suite and leave the network off.
   tryRun(ADB, ['shell', 'svc', 'wifi', 'enable']);
   tryRun(ADB, ['shell', 'svc', 'data', 'enable']);
+  // The theme flows force a specific night mode; hand control back to the OS.
+  tryRun(ADB, ['shell', 'cmd', 'uimode', 'night', 'auto']);
   // Wipe any test data (users, jobs, scans) written during the suite.
   tryRun(ADB, ['shell', 'pm', 'clear', EXPO_GO_PKG]);
 }
@@ -138,6 +146,14 @@ try {
   // Give Android a moment to bring connectivity back before retrying the job.
   sleep(3000);
   maestro('online-retry.yaml');
+
+  console.log('== Theme: pin dark over a light OS, then release ==');
+  setNightMode('no');
+  maestro('theme-toggle.yaml');
+
+  console.log('== Theme: follow a dark OS, pin light over it, then release ==');
+  setNightMode('yes');
+  maestro('theme-follow-system.yaml');
 
   console.log('All E2E flows passed.');
 } catch (err) {

@@ -1,15 +1,18 @@
 import { safeRandomUUID } from '@tanstack/db';
 import { useLiveQuery } from '@tanstack/react-db';
+import { ThemeToggle } from '@/components/theme-toggle';
+import { ThemeToggleButton } from '@/components/theme-toggle-button';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { Text } from '@/components/ui/text';
 import { jobsCollection, npmUsersCollection, type Job } from '@/db';
 import { processJob } from '@/lib/script';
 import { useState } from 'react';
-import { Alert, ScrollView, Switch, View } from 'react-native';
+import { Alert, ScrollView, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { Link } from 'expo-router';
+import { Link, Stack } from 'expo-router';
 
 const jobLabel = (job: Job, username: string): string => {
   switch (job.status) {
@@ -122,10 +125,15 @@ export default function Index() {
   };
 
   return (
-    <SafeAreaProvider>
-      <SafeAreaView className="bg-background flex-1">
-        <View className="gap-2 p-4">
-          {activeJobs.map((job) => (
+    <>
+      <Stack.Screen options={{ title: 'npm user tracker', headerRight: () => <ThemeToggleButton /> }} />
+      <SafeAreaProvider>
+        <SafeAreaView className="bg-background flex-1">
+          <View className="gap-2 p-4">
+            <ThemeToggle />
+          </View>
+          <View className="gap-2 px-4">
+            {activeJobs.map((job) => (
             <View key={job.id} className="gap-2">
               <View className={`rounded-md px-3 py-2 ${jobStyle(job.status)}`}>
                 <Text>{jobLabel(job, usernameOf(job))}</Text>
@@ -161,19 +169,19 @@ export default function Index() {
                   <View className="items-end gap-1">
                     {latest && <Text className="text-muted-foreground text-xs">{jobLabel(latest, username)}</Text>}
                     <Switch
-                      onValueChange={(e) =>
+                      checked={enable}
+                      onCheckedChange={(e) =>
                         void npmUsersCollection.update(id, (draft) => {
                           draft.enable = e;
                         })
                       }
-                      value={enable}
                     />
                   </View>
                 </CardContent>
               </Card>
             );
           })}
-          <Link asChild href={'/db'}>
+<Link asChild href={'/db'}>
             <Button testID="db-link" variant="link">
               <Text>go to db page</Text>
             </Button>
@@ -181,5 +189,6 @@ export default function Index() {
         </ScrollView>
       </SafeAreaView>
     </SafeAreaProvider>
+    </>
   );
 }

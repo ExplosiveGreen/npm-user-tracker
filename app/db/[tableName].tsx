@@ -5,10 +5,10 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Text } from '@/components/ui/text';
+import { ThemeToggleButton } from '@/components/theme-toggle-button';
 
 import { dbTables } from '@/db';
 import { ScrollView, View } from 'react-native';
-import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useGlobalSearchParams } from 'expo-router';
 import { useLiveQuery } from '@tanstack/react-db';
@@ -46,10 +46,11 @@ export default function TableScreen() {
   }
 
   return (
-    <Stack.Screen options={{ title: `db/${tableName}` }}>
+    <Stack.Screen
+      options={{ title: `db/${tableName}`, headerRight: () => <ThemeToggleButton /> }}
+    >
       <SafeAreaProvider>
         <SafeAreaView className="bg-background flex-1">
-          <StatusBar style="auto" />
           <ScrollView
             className="flex-1"
             contentContainerClassName="gap-4 p-4 pb-8"

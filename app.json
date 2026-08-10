@@ -4,7 +4,7 @@
     "slug": "npm-user-tracker",
     "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "scheme": "mynpm",
     "icon": "./assets/images/icon.png",
     "ios": {
