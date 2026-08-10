@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { ThemeToggleButton } from '@/components/theme-toggle-button';
 
-import { dbTables } from '@/db';
+import { dbTables, cascadeDeleteRow } from '@/db';
 import { Alert, ScrollView, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useGlobalSearchParams } from 'expo-router';
@@ -29,7 +29,7 @@ export default function TableScreen() {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => table!.collection.delete(key),
+          onPress: () => void cascadeDeleteRow(table!.name, key),
         },
       ],
     );

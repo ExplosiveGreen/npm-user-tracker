@@ -269,3 +269,60 @@ export const dbTables: DbTable[] = [
     collection: jobsCollection as unknown as DbTable['collection'],
   },
 ];
+
+// Foreign-key edges used by the explorer's cascade delete: when a row in the
+// parent table is deleted, every child row whose `field` equals the parent's key
+// is deleted first, recursively. Packages are intentionally not deleted when an
+// npm user is removed — package rows are global, shared across users and scans.
+export const cascadeRules: Record<string, { child: string; field: string }[]> = {
+  npm_users: [
+    { child: 'scans', field: 'npmUserId' },
+    { child: 'jobs', field: 'npmUserId' },
+    { child: 'package_maintainers', field: 'userId' },
+  ],
+  scans: [{ child: 'scan_packages', field: 'scanId' }],
+  packages: [
+    { child: 'scan_packages', field: 'packageId' },
+    { child: 'package_keywords', field: 'packageId' },
+    { child: 'package_maintainers', field: 'packageId' },
+    { child: 'package_versions', field: 'packageId' },
+  ],
+  scan_packages: [{ child: 'package_flags', field: 'scanPackageId' }],
+  flags: [{ child: 'package_flags', field: 'flagId' }],
+};
+
+// Deletes a row and, transitively, every row that references it. Child rows are
+// matched by their foreign-key field and keyed off their own `$key` (the row's
+// primary key), so composite-key tables need no special handling. Rows are
+// collected via DFS and deleted children-first.
+export const cascadeDeleteRow = async (tableName: string, key: string): Promise<void> => {
+  const root = dbTables.find((t) => t.name === tableName);
+  if (!root) return;
+
+  const visited = new Set<string>();
+  const toDelete: { table: DbTable; key: string }[] = [];
+
+  const collect = async (name: string, rowKey: string): Promise<void> => {
+    const visitKey = `${name}:${rowKey}`;
+    if (visited.has(visitKey)) return;
+    visited.add(visitKey);
+
+    for (const { child, field } of cascadeRules[name] ?? []) {
+      const childTable = dbTables.find((t) => t.name === child);
+      if (!childTable) continue;
+      await childTable.collection.preload();
+      for (const row of childTable.collection.toArray) {
+        if (String(row[field]) === rowKey) {
+          await collect(child, String(row.$key));
+        }
+      }
+    }
+    toDelete.push({ table: dbTables.find((t) => t.name === name)!, key: rowKey });
+  };
+
+  await collect(tableName, key);
+
+  for (const { table, key: rowKey } of toDelete) {
+    table.collection.delete(rowKey);
+  }
+};
