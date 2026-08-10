@@ -33,14 +33,37 @@ name: theme-toggle-pins-and-releases
     enabled: true
 
 # Flip to dark: target (light -> dark) differs from the OS, so it is pinned.
-- tapOn:
-    id: "dark-mode-switch"
+# The repeat retries the switch press if Expo Go's dev menu pops over the app
+# right after a fresh launch; dismissing it and pressing again works only because
+# the press is targeted by testID, not by screen coordinates.
+- repeat:
+    while:
+      notVisible: "Set to dark"
+    times: 3
+    commands:
+      - tapOn:
+          id: "dark-mode-switch"
+      - runFlow:
+          when:
+            visible: "Go home"
+          commands:
+            - back
 - assertVisible: "Set to dark"
 - assertVisible: "^Light$"
 
 # Flip back: target (dark -> light) matches the OS now, so the override is
 # released and the page follows the system again.
-- tapOn:
-    id: "dark-mode-switch"
+- repeat:
+    while:
+      notVisible: "Following system \\(light\\)"
+    times: 3
+    commands:
+      - tapOn:
+          id: "dark-mode-switch"
+      - runFlow:
+          when:
+            visible: "Go home"
+          commands:
+            - back
 - assertVisible: "Following system \\(light\\)"
 - assertVisible: "^Dark$"
