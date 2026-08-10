@@ -25,8 +25,14 @@ function run(cmd, args) {
 const adb = (...args) => run(ADB, args);
 
 // Runs a command capturing output; never throws so cleanup can always proceed.
-function tryRun(cmd, args) {
-  const res = spawnSync(cmd, args, { encoding: 'utf8', shell: IS_WIN });
+// maxBuffer is raised above the 1MB spawnSync default so large dumps (logcat)
+// are not truncated at the head, which would drop the newest lines.
+function tryRun(cmd, args, { maxBuffer } = {}) {
+  const res = spawnSync(cmd, args, {
+    encoding: 'utf8',
+    shell: IS_WIN,
+    maxBuffer: maxBuffer ?? 64 * 1024 * 1024,
+  });
   return { ok: !res.error && res.status === 0, stdout: res.stdout ?? '' };
 }
 
@@ -149,6 +155,22 @@ try {
 
   console.log('== Table screen: delete a row ==');
   maestro('table-delete.yaml');
+
+  console.log('== Durable: durable-wrapped scan populates all tables ==');
+  // The flow has to run after the offline/online pair because it needs network
+  // (and clearState inside each flow keeps the suites independent).
+  adb('logcat', '-c');
+  maestro('durable-scan.yaml');
+
+  // The scan must have run through lib/durable.ts. Expo Go forwards JS
+  // console.log lines to logcat, and lib/durable.ts emits a one-time [durable]
+  // marker naming the active path (durable __step steps, or the Hermes fallback
+  // when WebCrypto is absent). Either marker proves the scan was processed.
+  const logcat = tryRun(ADB, ['logcat', '-d', '-s', 'ReactNativeJS:*']);
+  if (!logcat.ok || !logcat.stdout.includes('[durable]')) {
+    throw new Error('Durable marker missing from logcat: the scan did not run through @durable/runtime');
+  }
+  console.log('  (scan ran through the durable module; active path above)');
 
   console.log('== Theme: pin dark over a light OS, then release ==');
   setNightMode('no');

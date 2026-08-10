@@ -13,6 +13,11 @@ import {
   packageFlagsCollection,
   type Job,
 } from '@/db';
+import {
+  createDurableScanInstance,
+  durableFetchJson,
+  type DurableInstance,
+} from '@/lib/durable';
 
 const NPM_SEARCH_URL = 'https://registry.npmjs.org/-/v1/search';
 
@@ -28,16 +33,21 @@ const loadUsersByUsername = async (): Promise<Map<string, string>> => {
 
 // Fetches one of the two npm registry search results. The registry response
 // (`objects`, `total`, `time`) does not include the query kind, so the caller
-// supplies `type: 'author' | 'maintainer'` to build a full `scanResult`.
+// supplies `type: 'author' | 'maintainer'` to build a full `scanResult`. Runs
+// as a durable step so transient failures are retried and identical queries are
+// cached per instance.
 export const fetchScan = async (
   type: scanResult['type'],
   username: string,
+  instance: DurableInstance,
 ): Promise<scanResult> => {
-  const response = await fetch(`${NPM_SEARCH_URL}?text=${type}:${encodeURIComponent(username)}`);
-  if (!response.ok) {
-    throw new Error(`npm search for "${username}" failed with status ${response.status}`);
-  }
-  const body = (await response.json()) as Omit<scanResult, 'type'>;
+  const body = await durableFetchJson<Omit<scanResult, 'type'>>(
+    `${NPM_SEARCH_URL}?text=${type}:${encodeURIComponent(username)}`,
+    'scan.search',
+    [type, username],
+    instance,
+    `npm search for "${username}"`,
+  );
   return { ...body, type };
 };
 
@@ -111,12 +121,17 @@ const upsertPackage = (object: ObjectsEntity): { id: string; versionChanged: boo
 // published version in package_versions. `created` and `modified` are registry
 // bookkeeping timestamps, not versions, so they are skipped. Versions are upserted
 // so overlapping author/maintainer scans and re-scans only fill in missing rows.
-const syncPackageVersions = async (packageId: string): Promise<void> => {
-  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageId)}`);
-  if (!response.ok) {
-    throw new Error(`fetching versions for "${packageId}" failed with status ${response.status}`);
-  }
-  const { time } = (await response.json()) as PackageInfo;
+const syncPackageVersions = async (
+  packageId: string,
+  instance: DurableInstance,
+): Promise<void> => {
+  const { time } = await durableFetchJson<PackageInfo>(
+    `https://registry.npmjs.org/${encodeURIComponent(packageId)}`,
+    'registry.metadata',
+    [packageId],
+    instance,
+    `fetching versions for "${packageId}"`,
+  );
   if (!time) return;
   await packageVersionsCollection.preload();
   for (const [version, date] of Object.entries(time)) {
@@ -132,8 +147,14 @@ const ensureInsecureFlag = (): string => {
 };
 
 // Writes one scan (author or maintainer) plus all of its related rows into the
-// schema tables.
-const persistScan = async (npmUserId: string, scan: scanResult): Promise<void> => {
+// schema tables. `instance` is the job-wide durable workflow instance shared by
+// every registry fetch, so overlapping author/maintainer scans reuse cached
+// package metadata instead of refetching it.
+const persistScan = async (
+  npmUserId: string,
+  scan: scanResult,
+  instance: DurableInstance,
+): Promise<void> => {
   const scanId = safeRandomUUID();
   scansCollection.insert({
     id: scanId,
@@ -152,7 +173,7 @@ const persistScan = async (npmUserId: string, scan: scanResult): Promise<void> =
     const { id: packageId, versionChanged } = upsertPackage(object);
 
     if (versionChanged) {
-      await syncPackageVersions(packageId);
+      await syncPackageVersions(packageId, instance);
     }
 
     const scanPackageId = safeRandomUUID();
@@ -218,16 +239,18 @@ export const processJob = async (jobId: string): Promise<void> => {
       return;
     }
 
-    const author = await fetchScan('author', npmUser.username);
-    const maintainer = await fetchScan('maintainer', npmUser.username);
+    const instance = createDurableScanInstance();
+
+    const author = await fetchScan('author', npmUser.username, instance);
+    const maintainer = await fetchScan('maintainer', npmUser.username, instance);
 
     if (author.total === 0 && maintainer.total === 0) {
       setJob(jobId, { status: 'no-data', authorTotal: 0, maintainerTotal: 0, finishedAt: new Date().toISOString() });
       return;
     }
 
-    await persistScan(job.npmUserId, author);
-    await persistScan(job.npmUserId, maintainer);
+    await persistScan(job.npmUserId, author, instance);
+    await persistScan(job.npmUserId, maintainer, instance);
 
     setJob(jobId, {
       status: 'success',

@@ -1,0 +1,62 @@
+appId: host.exp.exponent
+name: durable-scan-populates-tables
+---
+# Verifies the durable-client integration end-to-end on device. A fresh scan of
+# a real npm user runs through lib/durable.ts (@durable/runtime: retry policy,
+# step caching, per-run instance isolation) and still populates every scan
+# table. package_versions is written only by the durable registry.metadata step,
+# so a row there proves release history was fetched through the runtime. Starts
+# from a clean Expo Go state (empty DB).
+- launchApp:
+    clearState: true
+- openLink: exp://127.0.0.1:8081
+# Dismiss Expo Go's first-launch dev-menu onboarding if it appears, then close
+# the dev menu sheet that follows it so the app content is reachable.
+- tapOn:
+    text: "Continue"
+    optional: true
+- runFlow:
+    when:
+      visible: "Go home"
+    commands:
+      - back
+- extendedWaitUntil:
+    visible:
+      id: "username-input"
+    timeout: 120000
+
+- tapOn:
+    id: "username-input"
+- inputText: "instafluff"
+- tapOn:
+    id: "add-user"
+
+# The durable-wrapped scan (registry search + package metadata steps) completes.
+# Every newly-seen package also fetches its release history, so allow time.
+- extendedWaitUntil:
+    visible: "Done: instafluff.*"
+    timeout: 300000
+
+- assertVisible: "username : instafluff"
+
+# Deep-link to each durable-written table and require a row (#1), independent of
+# any specific package or count.
+- openLink: exp://127.0.0.1:8081/--/db/package_versions
+- extendedWaitUntil:
+    visible: "#1"
+    timeout: 15000
+
+- openLink: exp://127.0.0.1:8081/--/db/packages
+- extendedWaitUntil:
+    visible: "#1"
+    timeout: 15000
+
+- openLink: exp://127.0.0.1:8081/--/db/scans
+- extendedWaitUntil:
+    visible: "#1"
+    timeout: 15000
+
+- openLink: exp://127.0.0.1:8081/--/db/jobs
+- extendedWaitUntil:
+    visible: "#1"
+    timeout: 15000
