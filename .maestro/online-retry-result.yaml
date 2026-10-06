@@ -1,13 +1,11 @@
 appId: host.exp.exponent
-name: online-retry-populates-tables
+name: online-retry-populates-tables-result
 ---
-# Run after scripts/e2e.mjs has restored the network following the offline-add
-# flow. The app is still on the failed-job screen, so retry the same job and
-# verify every table received at least one row.
-- tapOn:
-    id: "retry-scan"
-# Success takes a while: every newly-seen package also fetches its full release
-# history from the registry during the scan, so allow time for that.
+# Runs after the harness force-ran the OS background task back online: the
+# requeued retry has now executed. Verify the success state and that every
+# table received at least one row.
+- openLink: exp://127.0.0.1:8081
+# Histories backfill after the job succeeds, so allow time for that.
 - extendedWaitUntil:
     visible: "Done: instafluff.*"
     timeout: 300000
@@ -36,8 +34,8 @@ name: online-retry-populates-tables
     visible: "#1"
     timeout: 15000
 
-# package_versions is only written by the version-sync feature, so a row here
-# proves release history was fetched from the registry.
+# package_versions is only written by the version-history backfill, so a row
+# here proves release history was fetched from the registry.
 - openLink: exp://127.0.0.1:8081/--/db/package_versions
 - extendedWaitUntil:
     visible: "#1"

@@ -314,10 +314,38 @@ const backfillVersionHistories = (packageIds: ReadonlyArray<string>): void => {
   );
 };
 
-// Resumes a backfill queue left behind by a killed app session.
-const resumePendingHistories = (): void => {
-  const pending = getPendingHistories();
-  if (pending.length > 0) backfillVersionHistories(pending);
+// Enqueues a scan job for one user without running it. The foreground NEVER
+// executes scans — it only writes jobs. Execution belongs exclusively to the
+// OS background task, so a scan never depends on the app being alive. Reuses
+// a waiting job when one already exists for the user.
+export const enqueueUserScan = (npmUserId: string): string => {
+  const existing = jobsCollection.toArray.find(
+    (job) => job.npmUserId === npmUserId && (job.status === "queued" || job.status === "running"),
+  );
+  if (existing) return existing.id;
+  const jobId = safeRandomUUID();
+  jobsCollection.insert({
+    id: jobId,
+    npmUserId,
+    status: "queued",
+    error: null,
+    authorTotal: 0,
+    maintainerTotal: 0,
+    attempts: 0,
+    createdAt: new Date().toISOString(),
+    startedAt: null,
+    finishedAt: null,
+  });
+  return jobId;
+};
+
+// Enqueues a sweep over all enabled users, skipping anyone who already has a
+// waiting job. Powers the "Queue check" button — foreground equivalent of
+// asking the background task for a full pass on its next run.
+export const enqueueSweep = (): void => {
+  for (const user of npmUsersCollection.toArray.filter((u) => u.enable)) {
+    enqueueUserScan(user.id);
+  }
 };
 
 // Waits until the version-history backfill drains (or the budget runs out).
@@ -551,13 +579,9 @@ const runScan = (job: Job): Effect.Effect<void, ScanError> =>
   });
 
 // Runs one tracked job to completion, driving its status as it goes: queued ->
-// running -> success | no-data | failed. Promise-based at the boundary for the
-// UI and background task callers; Effect inside.
-//
-// A failed job retries after a short delay while it still has budget left;
-// past that it waits for the next scheduled scan. Closing the app mid-scan
-// just leaves the job `running` — the next launch resumes it, and everything
-// already written stays written (every write is an idempotent upsert).
+// running -> success | no-data | failed. Runs ONLY inside the OS background
+// task — the foreground enqueues jobs and never calls this, so execution
+// never depends on the app being alive.
 export const processJob = (jobId: string): Promise<void> => {
   const job = jobsCollection.get(jobId);
   if (!job) return Promise.resolve();
@@ -625,12 +649,13 @@ const scheduleRetry = (jobId: string, delayMs: number = RETRY_DELAY_MS): void =>
   }, delayMs);
 };
 
-// Recovers scan work interrupted by a killed app. Runs once at startup:
-// `running` jobs died mid-scan (their partial writes are durable upserts, so
-// re-running completes them), leftover `queued` jobs never started, `failed`
-// jobs that lost their delayed retry get a fresh one, and an interrupted
-// version-history backfill resumes. Anything past the immediate retry budget
-// is left for the next scheduled scan.
+// Requeues scan work left behind by a killed session. Requeue-ONLY: the
+// foreground never executes scans, so this resets stale `running` jobs and
+// retryable `failed` jobs back to `queued` and stops there. The background
+// task (or its next OS window) does the actual running — including the
+// persisted version-history backlog, which merges into the next backfill on
+// its own. Anything past the immediate retry budget waits for a fresh sweep
+// job from the next scheduled run.
 export const recoverInterruptedScans = (): Promise<void> =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -643,26 +668,20 @@ export const recoverInterruptedScans = (): Promise<void> =>
       for (const job of interrupted) {
         yield* Effect.sync(() => setJob(job.id, { status: "queued", startedAt: null }));
       }
-      const queued = jobsCollection.toArray.filter((job) => job.status === "queued");
-      for (const job of queued) {
-        yield* Effect.promise(() => processJob(job.id));
-      }
-
-      const failed = jobsCollection.toArray.filter(
+      const retryable = jobsCollection.toArray.filter(
         (job) => job.status === "failed" && (job.attempts ?? 0) <= MAX_IMMEDIATE_RETRIES,
       );
-      yield* Effect.sync(() => {
-        for (const job of failed) scheduleRetry(job.id);
-      });
-
-      yield* Effect.sync(() => resumePendingHistories());
+      for (const job of retryable) {
+        yield* Effect.sync(() => setJob(job.id, { status: "queued", error: null }));
+      }
     }),
   );
 
-// Queues a fresh scan job for every enabled user and runs it. Used by the
-// "Check now" button and shared with the background task path. A fresh sweep
-// is also the "later date" retry: anything still failed or interrupted gets
-// scanned again here once the immediate retry budget is spent.
+// Queues a fresh scan job for every enabled user and runs it. Runs ONLY inside
+// the OS background task path — the foreground "Queue check" button merely
+// enqueues via enqueueSweep. A fresh sweep is also the "later date" retry:
+// anything still failed or interrupted gets scanned again here once the
+// immediate retry budget is spent.
 export const scanAllEnabled = (): Promise<void> =>
   Effect.runPromise(
     Effect.gen(function* () {

@@ -1,0 +1,20 @@
+appId: host.exp.exponent
+name: wrong-username-deletes-user-result
+---
+# Runs after the harness force-ran the OS background task: the queued scan for
+# the fake username has now executed. Reopen the app and verify the no-data
+# outcome plus the delete-user prompt. (No retry loop: retry only requeues
+# now, so a transient registry error would need another forced run.)
+- openLink: exp://127.0.0.1:8081
+- extendedWaitUntil:
+    visible:
+      id: "delete-user-button"
+    timeout: 60000
+- assertVisible: "No npm packages found for ~t3dotgg."
+
+# Confirm deletion removes the user from the list.
+- tapOn:
+    id: "delete-user-button"
+- assertVisible: "This user might not exist"
+- tapOn: "Delete user"
+- assertNotVisible: "~t3dotgg"

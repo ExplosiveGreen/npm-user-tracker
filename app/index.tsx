@@ -21,7 +21,7 @@ import {
   requestNotificationPermission,
   type NotificationPermission,
 } from '@/lib/notifications';
-import { processJob, scanAllEnabled } from '@/lib/script';
+import { enqueueSweep, enqueueUserScan } from '@/lib/script';
 import { suggestUsernames } from '@/lib/suggestions';
 import {
   getScanIntervalMinutes,
@@ -330,7 +330,6 @@ function RecentlyAdded() {
 
 export default function Index() {
   const [username, setUsername] = useState("");
-  const [checking, setChecking] = useState(false);
   const { data: users } = useLiveQuery((q) =>
     q.from({ users: npmUsersCollection }).select(({ users }) => ({
       id: users.id,
@@ -340,6 +339,9 @@ export default function Index() {
   );
   const { data: jobs } = useLiveQuery((q) => q.from({ jobs: jobsCollection }));
 
+  // Foreground only enqueues: the user row plus one queued job. The OS
+  // background task does the actual scanning, so the scan never depends on
+  // the app staying alive. Progress shows up live under "Needs attention".
   const addUser = () => {
     if (!username.trim()) return;
     const userId = safeRandomUUID();
@@ -349,29 +351,13 @@ export default function Index() {
       email: null,
       enable: true,
     });
-    const jobId = safeRandomUUID();
-    jobsCollection.insert({
-      id: jobId,
-      npmUserId: userId,
-      status: 'queued',
-      error: null,
-      authorTotal: 0,
-      maintainerTotal: 0,
-      attempts: 0,
-      createdAt: new Date().toISOString(),
-      startedAt: null,
-      finishedAt: null,
-    });
-    // Kick the job off immediately for visible feedback; the registered
-    // background task covers any still-queued work.
-    void processJob(jobId);
+    enqueueUserScan(userId);
     setUsername("");
   };
 
+  // Queues every enabled user for the next background run — never scans here.
   const checkNow = () => {
-    if (checking) return;
-    setChecking(true);
-    void scanAllEnabled().finally(() => setChecking(false));
+    enqueueSweep();
   };
 
   // Derived job/user lookups, memoized: jobs update on every status flip
@@ -400,6 +386,8 @@ export default function Index() {
   );
   const suggestions = useMemo(() => suggestUsernames(username, trackedNames), [username, trackedNames]);
 
+  // Manual retry just requeues with a fresh budget — the background task picks
+  // it up; the foreground never scans.
   const retryJob = (job: Job) => {
     jobsCollection.update(job.id, (draft) => {
       draft.status = 'queued';
@@ -410,7 +398,6 @@ export default function Index() {
       draft.maintainerTotal = 0;
       draft.attempts = 0;
     });
-    void processJob(job.id);
   };
 
   const promptDeleteUser = (job: Job) => {
@@ -507,11 +494,15 @@ export default function Index() {
                   </Button>
                 </View>
                 <View className="flex-1">
-                  <Button testID="check-now" variant="outline" onPress={checkNow} disabled={checking} className="w-full">
-                    <Text>{checking ? 'Checking…' : 'Check now'}</Text>
+                  <Button testID="check-now" variant="outline" onPress={checkNow} className="w-full">
+                    <Text>Queue check</Text>
                   </Button>
                 </View>
               </View>
+              <Text className="text-muted-foreground text-xs">
+                Scans run in the background, even with the app closed — new
+                authors are picked up on the next run.
+              </Text>
             </View>
 
             <ScanSchedule />

@@ -22,34 +22,16 @@ name: wrong-username-deletes-user
       id: "username-input"
     timeout: 120000
 
-# Enter a username that is not real and run the scan.
+# Enter a username that is not real and queue it. Execution lives in the OS
+# background task now — the foreground only enqueues, so a queued row (not an
+# outcome) is the expected state here. The harness force-runs the background
+# job next, then wrong-username-result.yaml asserts the outcome.
 - tapOn:
     id: "username-input"
 - inputText: "~t3dotgg"
 - tapOn:
     id: "add-user"
 
-# The registry returns no packages, so the job is flagged with the
-# "this user may not exist" prompt. A transient scan error can surface a retry
-# button instead; retry the scan until the no-data state is reached.
-- repeat:
-    while:
-      notVisible:
-        id: "delete-user-button"
-    times: 3
-    commands:
-      - tapOn:
-          id: "retry-scan"
-          optional: true
-      - extendedWaitUntil:
-          visible:
-            id: "delete-user-button"
-          timeout: 20000
-- assertVisible: "No npm packages found for ~t3dotgg."
-
-# Confirm deletion removes the user from the list.
-- tapOn:
-    id: "delete-user-button"
-- assertVisible: "This user might not exist"
-- tapOn: "Delete user"
-- assertNotVisible: "~t3dotgg"
+- extendedWaitUntil:
+    visible: "Queued: scanning ~t3dotgg…"
+    timeout: 20000

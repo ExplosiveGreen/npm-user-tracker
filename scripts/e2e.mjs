@@ -112,7 +112,31 @@ async function ensureExpoGo() {
   console.log('Expo Go installed.');
 }
 
-// Leave the device and app in a clean state even when a flow fails early.
+// Scans run exclusively in the OS background task, so the flows can only
+// queue work from the UI. This forces the scheduled WorkManager job to run
+// right now via adb (Expo's documented recipe) instead of waiting for the OS
+// window. The app must be backgrounded first — forced jobs won't run while
+// the app is in the foreground.
+function forceBackgroundScan() {
+  adb('shell', 'input', 'keyevent', 'KEYCODE_HOME');
+  sleep(1000);
+  const dump = tryRun(ADB, ['shell', 'dumpsys', 'jobscheduler']);
+  // Narrow to this app's WorkManager jobs (component SystemJobService).
+  const ours = new Set();
+  for (const line of dump.stdout.split('\n')) {
+    if (line.includes(EXPO_GO_PKG) && line.includes('SystemJobService')) {
+      const m = line.match(/\/(\d+):/);
+      if (m) ours.add(m[1]);
+    }
+  }
+  if (ours.size === 0) throw new Error('No scheduled background job found for Expo Go.');
+  for (const jobId of ours) {
+    console.log(`Forcing background job ${jobId}...`);
+    adb('shell', 'cmd', 'jobscheduler', 'run', '-f', EXPO_GO_PKG, jobId);
+  }
+  // Let the headless run (fetch + writes + history drain) finish.
+  sleep(120000);
+}
 function cleanup() {
   console.log('== Cleanup ==');
   // The offline flow can crash mid-suite and leave the network off.
@@ -134,18 +158,24 @@ try {
 
   console.log('== Wrong username ==');
   maestro('wrong-username.yaml');
+  forceBackgroundScan();
+  maestro('wrong-username-result.yaml');
 
-  console.log('== Offline: adding a user must fail with a retry button ==');
+  console.log('== Offline: adding a user queues a job, background run fails it ==');
   adb('shell', 'svc', 'wifi', 'disable');
   adb('shell', 'svc', 'data', 'disable');
   maestro('offline-add.yaml');
+  forceBackgroundScan();
+  maestro('offline-add-result.yaml');
 
-  console.log('== Online: retry populates all tables ==');
+  console.log('== Online: retry + background run populates all tables ==');
   adb('shell', 'svc', 'wifi', 'enable');
   adb('shell', 'svc', 'data', 'enable');
   // Give Android a moment to bring connectivity back before retrying the job.
   sleep(3000);
-  maestro('online-retry.yaml');
+  maestro('online-retry-queue.yaml');
+  forceBackgroundScan();
+  maestro('online-retry-result.yaml');
 
   console.log('== Table screen: delete a row ==');
   maestro('table-delete.yaml');

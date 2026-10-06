@@ -1,9 +1,11 @@
 appId: host.exp.exponent
 name: offline-add-shows-retry
 ---
-# Run while the device network is disabled (done from scripts/e2e.sh before
-# invoking this flow): a real username is added and the scan fetch fails, so the
-# job surfaces the retry button. Starts from a clean Expo Go state (empty DB).
+# Run while the device network is disabled (done from scripts/e2e.mjs). The
+# foreground only enqueues now, so adding a real username while offline must
+# show a queued job — the failure surfaces after the harness force-runs the
+# background task (offline-add-result.yaml). Starts from a clean Expo Go
+# state (empty DB).
 - launchApp:
     clearState: true
 - openLink: exp://127.0.0.1:8081
@@ -28,9 +30,7 @@ name: offline-add-shows-retry
 - tapOn:
     id: "add-user"
 
-# The fetch fails, so the job errors and offers a retry.
+# The job queues instead of failing — execution lives in the background task.
 - extendedWaitUntil:
-    visible:
-      id: "retry-scan"
+    visible: "Queued: scanning instafluff…"
     timeout: 45000
-- assertVisible: "Scan failed for instafluff.*"

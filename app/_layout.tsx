@@ -37,8 +37,8 @@ export default function RootLayout() {
     registerScanTask().catch((error) => {
       console.warn('Background task registration skipped', error);
     });
-    // Resumes scans killed with the app: partial progress is already durable,
-    // so interrupted jobs just re-run to completion and failed ones retry.
+    // Requeues anything a killed session left behind (stale running jobs go
+    // back to queued; the background task does the actual running).
     recoverInterruptedScans().catch((error) => {
       console.warn('Interrupted scan recovery skipped', error);
     });
