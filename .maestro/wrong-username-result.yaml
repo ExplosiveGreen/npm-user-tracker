@@ -25,7 +25,6 @@ name: wrong-username-deletes-user-result
           optional: true
 - assertVisible: "This user might not exist"
 - tapOn: "Delete user"
-- extendedWaitUntil:
+- scrollUntilVisible:
     visible: "Nobody tracked yet."
-    timeout: 15000
 - assertNotVisible: "~t3dotgg"

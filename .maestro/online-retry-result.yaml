@@ -10,8 +10,10 @@ name: online-retry-populates-tables-result
     visible: "Done: instafluff.*"
     timeout: 300000
 
-# Npm users show up on the home screen once persisted.
-- assertVisible: "username : instafluff"
+# Npm users show up on the home screen once persisted (below the fold —
+# scroll it into view first).
+- scrollUntilVisible:
+    visible: "username : instafluff"
 
 # Navigate to the DB explorer and confirm each table has data. Deep-linking to
 # the route is more reliable than tapping the on-screen link while the home
