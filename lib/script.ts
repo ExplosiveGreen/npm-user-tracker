@@ -589,9 +589,24 @@ export const processJob = (jobId: string): Promise<void> => {
   });
 };
 
+// A `running` row older than this belonged to a dead session. Fresh ones may
+// be a live worker in another runtime (foreground vs headless background share
+// SQLite but not memory), so both sides leave fresh `running` jobs alone.
+// A single job's running phase is only searches + local upserts — minutes at
+// most — so anything older is certainly orphaned.
+const STALE_RUNNING_MS = 10 * 60_000;
+
 // Jobs actively running in this session. A `running` row NOT in this set is
-// a leftover from a killed session — safe to treat as interrupted.
+// either a live worker in the other runtime or a leftover from a killed
+// session — isStaleRunning tells those apart.
 const liveJobIds = new Set<string>();
+
+const isStaleRunning = (job: Job): boolean => {
+  if (job.status !== "running") return false;
+  const started = job.startedAt ? Date.parse(job.startedAt) : NaN;
+  if (Number.isNaN(started)) return true;
+  return Date.now() - started > STALE_RUNNING_MS;
+};
 
 // One-shot delayed retry for a failed job. Guards: never double-schedule, and
 // re-checks the job is still `failed` at fire time (the user may have tapped
@@ -623,7 +638,7 @@ export const recoverInterruptedScans = (): Promise<void> =>
       yield* Effect.promise(() => npmUsersCollection.preload());
 
       const interrupted = jobsCollection.toArray.filter(
-        (job) => job.status === "running" && (job.attempts ?? 0) <= MAX_IMMEDIATE_RETRIES,
+        (job) => isStaleRunning(job) && (job.attempts ?? 0) <= MAX_IMMEDIATE_RETRIES,
       );
       for (const job of interrupted) {
         yield* Effect.sync(() => setJob(job.id, { status: "queued", startedAt: null }));
@@ -655,9 +670,10 @@ export const scanAllEnabled = (): Promise<void> =>
       yield* Effect.promise(() => jobsCollection.preload());
       // `running` rows from a killed session never complete on their own —
       // close them out as interrupted so "Needs attention" tells the truth.
-      // Live jobs in this session are excluded via liveJobIds.
+      // Live jobs in this session are excluded via liveJobIds; possibly-live
+      // jobs in the other runtime via isStaleRunning.
       const stale = jobsCollection.toArray.filter(
-        (job) => job.status === "running" && !liveJobIds.has(job.id),
+        (job) => isStaleRunning(job) && !liveJobIds.has(job.id),
       );
       for (const job of stale) {
         yield* Effect.sync(() =>
@@ -672,21 +688,28 @@ export const scanAllEnabled = (): Promise<void> =>
       const enabled = npmUsersCollection.toArray.filter((user) => user.enable);
       yield* Effect.forEach(enabled, (user) =>
         Effect.gen(function* () {
-          const jobId = safeRandomUUID();
-          yield* Effect.sync(() =>
-            jobsCollection.insert({
-              id: jobId,
-              npmUserId: user.id,
-              status: "queued",
-              error: null,
-              authorTotal: 0,
-              maintainerTotal: 0,
-              attempts: 0,
-              createdAt: new Date().toISOString(),
-              startedAt: null,
-              finishedAt: null,
-            }),
+          // Reuse a waiting job when one exists (e.g. left by a killed
+          // session) instead of stacking a duplicate sweep on top of it.
+          const existing = jobsCollection.toArray.find(
+            (job) => job.npmUserId === user.id && job.status === "queued",
           );
+          const jobId = existing?.id ?? safeRandomUUID();
+          if (!existing) {
+            yield* Effect.sync(() =>
+              jobsCollection.insert({
+                id: jobId,
+                npmUserId: user.id,
+                status: "queued",
+                error: null,
+                authorTotal: 0,
+                maintainerTotal: 0,
+                attempts: 0,
+                createdAt: new Date().toISOString(),
+                startedAt: null,
+                finishedAt: null,
+              }),
+            );
+          }
           yield* Effect.promise(() => processJob(jobId));
         }),
       );
