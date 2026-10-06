@@ -1,32 +1,59 @@
-import { BackgroundTaskResult } from 'expo-background-task';
+import { BackgroundTaskResult, registerTaskAsync, unregisterTaskAsync } from 'expo-background-task';
 import { defineTask } from 'expo-task-manager';
 import { Platform } from 'react-native';
-import { jobsCollection, npmUsersCollection } from '@/db';
-import { processJob } from '@/lib/script';
+import { getPref, setPref } from '@/lib/prefs';
+import { scanAllEnabled } from '@/lib/script';
 
 export const SCAN_TASK_NAME = 'scan-npm-users';
-// Hourly is frequent enough for npm releases without draining the battery;
-// Android enforces a 15-minute minimum, iOS decides its own windows.
-export const SCAN_TASK_INTERVAL_MINUTES = 60;
+
+const SCAN_INTERVAL_KEY = 'scan-interval-minutes';
+export const DEFAULT_SCAN_INTERVAL_MINUTES = 60;
+
+// Android enforces a 15-minute minimum and batches jobs to save battery; iOS
+// decides its own windows (often once a day) no matter what is requested.
+export const SCAN_INTERVAL_OPTIONS = [
+  { minutes: 15, label: '15 min' },
+  { minutes: 60, label: 'Hourly' },
+  { minutes: 360, label: '6 hours' },
+  { minutes: 720, label: '12 hours' },
+  { minutes: 1440, label: 'Daily' },
+] as const;
+
+export function getScanIntervalMinutes(): number {
+  const stored = Number(getPref(SCAN_INTERVAL_KEY));
+  if (SCAN_INTERVAL_OPTIONS.some((option) => option.minutes === stored)) return stored;
+  return DEFAULT_SCAN_INTERVAL_MINUTES;
+}
+
+// Persists the schedule and re-registers the OS task so the new interval
+// applies without restarting the app.
+export async function setScanIntervalMinutes(minutes: number): Promise<void> {
+  if (!SCAN_INTERVAL_OPTIONS.some((option) => option.minutes === minutes)) {
+    throw new Error(`Unsupported scan interval: ${minutes}`);
+  }
+  setPref(SCAN_INTERVAL_KEY, String(minutes));
+  await registerScanTask();
+}
+
+export async function registerScanTask(): Promise<void> {
+  if (Platform.OS === 'web') return;
+  const minimumInterval = getScanIntervalMinutes();
+  try {
+    await unregisterTaskAsync(SCAN_TASK_NAME);
+  } catch {
+    // Not registered yet — nothing to remove.
+  }
+  await registerTaskAsync(SCAN_TASK_NAME, { minimumInterval });
+}
 
 // Defined at module scope so the task is available even when its consuming
-// screen is not mounted. Reads back any jobs that are still queued (e.g. ones
-// scheduled while the app was away) and runs them to completion. Disabled
-// users are skipped — the enable switch is the notification opt-out.
+// screen is not mounted. The task creates its own jobs for every enabled user
+// (the enable switch is the notification opt-out), so scans happen on the OS
+// schedule even when the app is closed — no open screen required.
 if (Platform.OS !== 'web') {
   defineTask(SCAN_TASK_NAME, async () => {
     try {
-      await jobsCollection.preload();
-      await npmUsersCollection.preload();
-      const enabledIds = new Set(
-        npmUsersCollection.toArray.filter((user) => user.enable).map((user) => user.id),
-      );
-      const queued = jobsCollection.toArray.filter(
-        (job) => job.status === 'queued' && enabledIds.has(job.npmUserId),
-      );
-      for (const job of queued) {
-        await processJob(job.id);
-      }
+      await scanAllEnabled();
       return BackgroundTaskResult.Success;
     } catch (error) {
       console.error('Failed to run background scan task', error);

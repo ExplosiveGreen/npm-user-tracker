@@ -1,6 +1,5 @@
 import { safeRandomUUID } from '@tanstack/db';
 import { useLiveQuery } from '@tanstack/react-db';
-import { ThemeToggle } from '@/components/theme-toggle';
 import { ThemeToggleButton } from '@/components/theme-toggle-button';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,6 +11,8 @@ import {
   npmUsersCollection,
   packagesCollection,
   packageVersionsCollection,
+  scansCollection,
+  scanPackagesCollection,
   type Job,
 } from '@/db';
 import {
@@ -21,6 +22,11 @@ import {
   type NotificationPermission,
 } from '@/lib/notifications';
 import { processJob, scanAllEnabled } from '@/lib/script';
+import {
+  getScanIntervalMinutes,
+  setScanIntervalMinutes,
+  SCAN_INTERVAL_OPTIONS,
+} from '@/lib/tasks';
 import { useEffect, useState } from 'react';
 import { Alert, ScrollView, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -40,6 +46,9 @@ const jobLabel = (job: Job, username: string): string => {
       return `No npm packages found for ${username}.`;
   }
 };
+
+const PAGE_SIZE = 5;
+const PAGE_GROWTH = 10;
 
 // Notification setup banner: explains that tracking = notifications, surfaces
 // the OS permission state, and offers a one-tap enable.
@@ -80,20 +89,56 @@ function NotificationSetup() {
   );
 }
 
+// Scan schedule control: persists the interval and re-registers the
+// OS-scheduled background task, so rescans happen even when the app is closed.
+// The OS treats the interval as a minimum — Android batches jobs to save
+// battery (15-minute minimum) and iOS runs them on its own windows.
+function ScanSchedule() {
+  const [minutes, setMinutes] = useState(getScanIntervalMinutes);
+
+  return (
+    <View className="gap-2">
+      <Text className="text-lg font-semibold">Scan schedule</Text>
+      <View className="flex-row flex-wrap gap-2">
+        {SCAN_INTERVAL_OPTIONS.map((option) => (
+          <Button
+            key={option.minutes}
+            testID={`scan-interval-${option.minutes}`}
+            variant={option.minutes === minutes ? 'default' : 'outline'}
+            size="sm"
+            onPress={() =>
+              void setScanIntervalMinutes(option.minutes).then(() => setMinutes(option.minutes))
+            }
+          >
+            <Text>{option.label}</Text>
+          </Button>
+        ))}
+      </View>
+      <Text className="text-muted-foreground text-xs">
+        Enabled authors are rescanned automatically, even with the app closed.
+        The exact timing is up to the OS. The switch on each author is the
+        notification opt-out.
+      </Text>
+    </View>
+  );
+}
+
 // Release history: the newest package versions across all tracked packages.
 // package_versions is the source of truth — every version bump recorded by a
 // scan lands here with its registry date.
 function RecentUpdates() {
+  const [limit, setLimit] = useState(PAGE_SIZE);
   const { data: versions } = useLiveQuery((q) => q.from({ v: packageVersionsCollection }));
   const { data: packages } = useLiveQuery((q) => q.from({ p: packagesCollection }));
 
   const publisherByPackage = new Map((packages ?? []).map((p) => [p.id, p.publisherId]));
-  const recent = (versions ?? [])
+  const sorted = (versions ?? [])
     .slice()
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, 20);
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const visible = sorted.slice(0, limit);
+  const remaining = sorted.length - visible.length;
 
-  if (recent.length === 0) {
+  if (sorted.length === 0) {
     return (
       <Card className="w-full">
         <CardContent>
@@ -107,7 +152,7 @@ function RecentUpdates() {
 
   return (
     <View className="gap-2">
-      {recent.map((v) => (
+      {visible.map((v) => (
         <Card key={`${v.packageId}/${v.version}`} className="w-full">
           <CardContent className="flex-row items-center justify-between">
             <View className="flex-1 gap-0.5">
@@ -123,6 +168,75 @@ function RecentUpdates() {
           </CardContent>
         </Card>
       ))}
+      {remaining > 0 && (
+        <Button testID="show-more-updates" variant="outline" onPress={() => setLimit((l) => l + PAGE_GROWTH)}>
+          <Text>Show more ({remaining} left)</Text>
+        </Button>
+      )}
+    </View>
+  );
+}
+
+// Packages this app discovered most recently, newest first. Discovery time is
+// the earliest scan that reported the package (via its scan_packages rows),
+// not the registry publish date.
+function RecentlyAdded() {
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const { data: scans } = useLiveQuery((q) => q.from({ s: scansCollection }));
+  const { data: scanPackages } = useLiveQuery((q) => q.from({ sp: scanPackagesCollection }));
+  const { data: packages } = useLiveQuery((q) => q.from({ p: packagesCollection }));
+
+  const scannedAtById = new Map((scans ?? []).map((s) => [s.id, s.scannedAt]));
+  const discoveredByPackage = new Map<string, string>();
+  for (const sp of scanPackages ?? []) {
+    const scannedAt = scannedAtById.get(sp.scanId);
+    if (!scannedAt) continue;
+    const prev = discoveredByPackage.get(sp.packageId);
+    if (!prev || scannedAt < prev) discoveredByPackage.set(sp.packageId, scannedAt);
+  }
+  const packageById = new Map((packages ?? []).map((p) => [p.id, p]));
+  const sorted = [...discoveredByPackage.entries()].sort((a, b) => b[1].localeCompare(a[1]));
+  const visible = sorted.slice(0, limit);
+  const remaining = sorted.length - visible.length;
+
+  if (sorted.length === 0) {
+    return (
+      <Card className="w-full">
+        <CardContent>
+          <Text className="text-muted-foreground text-sm">
+            Nothing discovered yet. New packages from tracked authors will show up here.
+          </Text>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <View className="gap-2">
+      {visible.map(([packageId, discoveredAt]) => {
+        const pkg = packageById.get(packageId);
+        return (
+          <Card key={packageId} className="w-full">
+            <CardContent className="flex-row items-center justify-between">
+              <View className="flex-1 gap-0.5">
+                <Text className="font-medium">{packageId}</Text>
+                <Text className="text-muted-foreground text-xs">
+                  {pkg?.publisherId ?? 'unknown author'}
+                </Text>
+              </View>
+              <View className="items-end gap-0.5">
+                {pkg && <Text className="text-sm">{pkg.version}</Text>}
+                <Text className="text-muted-foreground text-xs">{discoveredAt.slice(0, 10)}</Text>
+              </View>
+            </CardContent>
+          </Card>
+        );
+      })}
+      {remaining > 0 && (
+        <Button testID="show-more-added" variant="outline" onPress={() => setLimit((l) => l + PAGE_GROWTH)}>
+          <Text>Show more ({remaining} left)</Text>
+        </Button>
+      )}
     </View>
   );
 }
@@ -280,11 +394,9 @@ export default function Index() {
                   </Button>
                 </View>
               </View>
-              <Text className="text-muted-foreground text-xs">
-                Enabled authors are rescanned hourly in the background. The switch on each author
-                is the notification opt-out.
-              </Text>
             </View>
+
+            <ScanSchedule />
 
             <View className="gap-2">
               <Text className="text-lg font-semibold">Tracked authors</Text>
@@ -320,13 +432,15 @@ export default function Index() {
             </View>
 
             <View className="gap-2">
-              <ThemeToggle />
-              <Link asChild href={'/db'}>
-                <Button testID="db-link" variant="link">
-                  <Text>go to db page</Text>
-                </Button>
-              </Link>
+              <Text className="text-lg font-semibold">Recently added</Text>
+              <RecentlyAdded />
             </View>
+
+            <Link asChild href={'/db'}>
+              <Button testID="db-link" variant="link">
+                <Text>go to db page</Text>
+              </Button>
+            </Link>
           </ScrollView>
         </SafeAreaView>
       </SafeAreaProvider>
