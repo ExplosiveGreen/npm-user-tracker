@@ -2,7 +2,7 @@
   "expo": {
     "name": "npm user tracker",
     "slug": "npm-user-tracker",
-    "version": "1.0.0-alpha.2",
+    "version": "1.0.0-alpha.1",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "scheme": "mynpm",
@@ -20,7 +20,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.npmusertracker",
-      "versionCode": 2
+      "versionCode": 1
     },
     "web": {
       "output": "static",
