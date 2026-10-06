@@ -1,0 +1,18 @@
+appId: com.anonymous.npmusertracker
+name: schedule-interval-validation-and-apply-2
+---
+# Continues schedule-interval.yaml after `adb shell input text 5` typed the
+# digits into the focused field.
+- hideKeyboard
+- tapOn: "Minutes"
+- tapOn:
+    id: "scan-interval-apply"
+- assertVisible: "That is under the 15-minute minimum the OS allows."
+- assertVisible: "Currently: every 1 hour."
+
+# A valid choice applies and is shown back. Type the next digits via
+# `adb shell input text 2` after this focuses the field, then run
+# schedule-interval-apply2.yaml.
+- tapOn:
+    id: "scan-interval-number"
+- eraseText: 10

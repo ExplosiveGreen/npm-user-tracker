@@ -1,0 +1,17 @@
+appId: com.anonymous.npmusertracker
+name: schedule-interval-validation-and-apply-3
+---
+# Continues schedule-interval-apply.yaml after `adb shell input text 2` typed
+# the digits into the focused field.
+- hideKeyboard
+- tapOn: "Hours"
+- tapOn:
+    id: "scan-interval-apply"
+- assertVisible: "Currently: every 2 hours."
+
+# Relaunch without clearing: the saved schedule must still be there.
+- launchApp:
+    clearState: false
+- extendedWaitUntil:
+    visible: "Currently: every 2 hours."
+    timeout: 60000

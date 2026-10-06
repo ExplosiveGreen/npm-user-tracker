@@ -2,10 +2,11 @@ appId: host.exp.exponent
 name: offline-add-shows-retry
 ---
 # Run while the device network is disabled (done from scripts/e2e.mjs). The
-# foreground only enqueues now, so adding a real username while offline must
-# show a queued job — the failure surfaces after the harness force-runs the
-# background task (offline-add-result.yaml). Starts from a clean Expo Go
-# state (empty DB).
+# flow only focuses the field — the harness types the name via adb key events
+# next (Maestro's inputText bypasses React Native's onChange), then
+# offline-add-add.yaml taps Add. The failure surfaces after the harness
+# force-runs the background task (offline-add-result.yaml). Starts from a
+# clean Expo Go state (empty DB).
 - launchApp:
     clearState: true
 - openLink: exp://127.0.0.1:8081
@@ -26,11 +27,3 @@ name: offline-add-shows-retry
 
 - tapOn:
     id: "username-input"
-- inputText: "instafluff"
-- tapOn:
-    id: "add-user"
-
-# The job queues instead of failing — execution lives in the background task.
-- extendedWaitUntil:
-    visible: "Queued: scanning instafluff…"
-    timeout: 45000

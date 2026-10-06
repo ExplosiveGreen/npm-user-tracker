@@ -1,0 +1,21 @@
+appId: host.exp.exponent
+name: username-suggestions-add
+---
+# Continues username-suggestions.yaml after `adb shell input text t3dot`
+# typed the prefix into the focused field.
+- extendedWaitUntil:
+    visible:
+      id: "username-suggestions"
+    timeout: 10000
+- assertVisible: "t3dotgg"
+
+# Suggestions are suggestions-only: nothing is tracked until "Add user".
+- assertNotVisible: "username : t3dotgg"
+
+# Tapping the suggestion fills the input; adding tracks the user.
+- tapOn: "t3dotgg"
+- tapOn:
+    id: "add-user"
+- extendedWaitUntil:
+    visible: "username : t3dotgg"
+    timeout: 20000

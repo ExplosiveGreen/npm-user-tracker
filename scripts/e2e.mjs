@@ -158,6 +158,8 @@ try {
 
   console.log('== Wrong username ==');
   maestro('wrong-username.yaml');
+  typeText('~t3dotgg');
+  maestro('wrong-username-add.yaml');
   forceBackgroundScan();
   maestro('wrong-username-result.yaml');
 
@@ -165,6 +167,8 @@ try {
   adb('shell', 'svc', 'wifi', 'disable');
   adb('shell', 'svc', 'data', 'disable');
   maestro('offline-add.yaml');
+  typeText('instafluff');
+  maestro('offline-add-add.yaml');
   forceBackgroundScan();
   maestro('offline-add-result.yaml');
 

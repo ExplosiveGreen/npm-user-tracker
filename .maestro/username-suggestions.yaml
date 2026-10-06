@@ -23,22 +23,9 @@ name: username-suggestions
     timeout: 120000
 
 # Typing a prefix surfaces the suggestion dropdown with the real username.
+# Typing is split out: Maestro's inputText bypasses React Native's onChange
+# (no suggestions would appear), so after this flow focuses the field, type
+# the prefix via `adb shell input text t3dot`, then run
+# username-suggestions-add.yaml.
 - tapOn:
     id: "username-input"
-- inputText: "t3dot"
-- extendedWaitUntil:
-    visible:
-      id: "username-suggestions"
-    timeout: 10000
-- assertVisible: "t3dotgg"
-
-# Suggestions are suggestions-only: nothing is tracked until "Add user".
-- assertNotVisible: "username : t3dotgg"
-
-# Tapping the suggestion fills the input; adding tracks the user.
-- tapOn: "t3dotgg"
-- tapOn:
-    id: "add-user"
-- extendedWaitUntil:
-    visible: "username : t3dotgg"
-    timeout: 20000
