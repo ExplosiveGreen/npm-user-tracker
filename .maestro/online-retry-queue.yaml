@@ -5,9 +5,16 @@ name: online-retry-queues-job
 # flow. The app is still on the failed-job screen; tapping retry only requeues
 # now (execution lives in the background task), so assert the queued state.
 # The harness force-runs the background job next, then online-retry-result
-# asserts the populated tables.
-- tapOn:
-    id: "retry-scan"
-- extendedWaitUntil:
-    visible: "Queued: scanning instafluff…"
-    timeout: 20000
+# asserts the populated tables. The tap is retried: background writes can
+# re-render the list mid-tap.
+- repeat:
+    while:
+      notVisible: "Queued: scanning instafluff…"
+    times: 3
+    commands:
+      - tapOn:
+          id: "retry-scan"
+          optional: true
+      - extendedWaitUntil:
+          visible: "Queued: scanning instafluff…"
+          timeout: 10000

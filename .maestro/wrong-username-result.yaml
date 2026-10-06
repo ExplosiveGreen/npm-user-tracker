@@ -12,9 +12,18 @@ name: wrong-username-deletes-user-result
     timeout: 60000
 - assertVisible: "No npm packages found for ~t3dotgg."
 
-# Confirm deletion removes the user from the list.
-- tapOn:
-    id: "delete-user-button"
-- assertVisible: "This user might not exist"
+# Confirm deletion removes the user from the list. The tap is retried: the
+# background backfill can still be landing writes, re-rendering the list
+# mid-tap.
+- repeat:
+    while:
+      notVisible: "This user might not exist"
+    times: 3
+    commands:
+      - tapOn:
+          id: "delete-user-button"
+      - extendedWaitUntil:
+          visible: "This user might not exist"
+          timeout: 10000
 - tapOn: "Delete user"
 - assertNotVisible: "~t3dotgg"
