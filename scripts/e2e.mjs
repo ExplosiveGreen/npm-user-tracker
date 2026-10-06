@@ -7,6 +7,7 @@
 // live here with the flows split around them.
 import { spawnSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -122,6 +123,57 @@ function typeText(text) {
   sleep(3000);
 }
 
+// Dumps the on-device UI hierarchy and returns it as text.
+function uiDump() {
+  adb('shell', 'uiautomator', 'dump', '/sdcard/e2e.xml');
+  const local = path.join(os.tmpdir(), 'e2e-ui.xml');
+  adb('pull', '/sdcard/e2e.xml', local);
+  return readFileSync(local, 'utf8');
+}
+
+// Center of the first hierarchy node mentioning key (testIDs land in the
+// node's resource-id/content-desc), or null when absent.
+function findCenter(xml, key) {
+  for (const m of xml.matchAll(/<node[^>]*>/g)) {
+    if (!m[0].includes(key)) continue;
+    const b = m[0].match(/bounds="([^"]*)"/);
+    if (!b) continue;
+    const n = b[1].match(/\d+/g).map(Number);
+    return [(n[0] + n[2]) >> 1, (n[1] + n[3]) >> 1];
+  }
+  return null;
+}
+
+function tapKey(key) {
+  const c = findCenter(uiDump(), key);
+  if (!c) throw new Error(`No UI node found for ${key}`);
+  adb('shell', 'input', 'tap', String(c[0]), String(c[1]));
+  sleep(1000);
+}
+
+// Types a username and taps Add until the queued row is actually on screen.
+// Retries paper over focus races and IME lag: each attempt refocuses, clears
+// via Delete key events (which keep React state in sync), retypes through
+// key events, and taps Add at its current bounds (suggestion rows shift it).
+function ensureQueued(name, tries = 3) {
+  for (let i = 1; i <= tries; i++) {
+    tapKey('username-input');
+    const before = uiDump();
+    const cur = (before.match(/username-input"[^>]*text="([^"]*)"/) ?? before.match(/text="([^"]*)"[^>]*username-input/));
+    const len = cur ? [...cur[1]].length : 0;
+    for (let k = 0; k < len; k++) adb('shell', 'input', 'keyevent', 'KEYCODE_DEL');
+    typeText(name);
+    tapKey('add-user');
+    sleep(3000);
+    if (uiDump().includes(`Queued: scanning ${name}`)) {
+      console.log(`Queued ${name} (attempt ${i}).`);
+      return;
+    }
+    console.log(`Queue attempt ${i} for ${name} missed, retrying...`);
+  }
+  throw new Error(`Add user never queued for ${name}`);
+}
+
 // Scans run exclusively in the OS background task, so the flows can only
 // queue work from the UI. This forces the scheduled WorkManager job to run
 // right now via adb (Expo's documented recipe) instead of waiting for the OS
@@ -168,8 +220,7 @@ try {
 
   console.log('== Wrong username ==');
   maestro('wrong-username.yaml');
-  typeText('~t3dotgg');
-  maestro('wrong-username-add.yaml');
+  ensureQueued('~t3dotgg');
   forceBackgroundScan();
   maestro('wrong-username-result.yaml');
 
@@ -177,8 +228,7 @@ try {
   adb('shell', 'svc', 'wifi', 'disable');
   adb('shell', 'svc', 'data', 'disable');
   maestro('offline-add.yaml');
-  typeText('instafluff');
-  maestro('offline-add-add.yaml');
+  ensureQueued('instafluff');
   forceBackgroundScan();
   maestro('offline-add-result.yaml');
 

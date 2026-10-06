@@ -3,8 +3,8 @@ name: offline-add-shows-retry
 ---
 # Run while the device network is disabled (done from scripts/e2e.mjs). The
 # flow only focuses the field — the harness types the name via adb key events
-# next (Maestro's inputText bypasses React Native's onChange), then
-# offline-add-add.yaml taps Add. The failure surfaces after the harness
+# and taps Add until the queued row appears (Maestro's inputText bypasses
+# React Native's onChange). The failure surfaces after the harness
 # force-runs the background task (offline-add-result.yaml). Starts from a
 # clean Expo Go state (empty DB).
 - launchApp:

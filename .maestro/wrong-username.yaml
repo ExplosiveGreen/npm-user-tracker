@@ -23,9 +23,9 @@ name: wrong-username-deletes-user
     timeout: 120000
 
 # Enter a username that is not real and queue it. The flow only focuses the
-# field — the harness types the name via adb key events next (Maestro's
-# inputText uses setText, which bypasses React Native's onChange so the Add
-# button would silently no-op). Then wrong-username-add.yaml taps Add and the
+# field — the harness types the name via adb key events and taps Add until
+# the queued row appears (Maestro's inputText uses setText, which bypasses
+# React Native's onChange so the Add button would silently no-op). Then the
 # harness force-runs the background job before wrong-username-result.yaml
 # asserts the outcome.
 - tapOn:
