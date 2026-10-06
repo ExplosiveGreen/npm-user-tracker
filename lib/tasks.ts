@@ -2,7 +2,7 @@ import { BackgroundTaskResult, registerTaskAsync, unregisterTaskAsync } from 'ex
 import { defineTask } from 'expo-task-manager';
 import { Platform } from 'react-native';
 import { getPref, setPref } from '@/lib/prefs';
-import { scanAllEnabled } from '@/lib/script';
+import { runBackgroundScan } from '@/lib/script';
 
 export const SCAN_TASK_NAME = 'scan-npm-users';
 
@@ -50,13 +50,15 @@ export async function registerScanTask(): Promise<void> {
 }
 
 // Defined at module scope so the task is available even when its consuming
-// screen is not mounted. The task creates its own jobs for every enabled user
-// (the enable switch is the notification opt-out), so scans happen on the OS
-// schedule even when the app is closed — no open screen required.
+// screen is not mounted. Each run recovers interrupted work, sweeps every
+// enabled user (the enable switch is the notification opt-out), and holds the
+// OS execution window until version histories drain — so scans happen on the
+// OS schedule even when the app is closed, and closing the app mid-scan just
+// hands the job to the next background run instead of losing it.
 if (Platform.OS !== 'web') {
   defineTask(SCAN_TASK_NAME, async () => {
     try {
-      await scanAllEnabled();
+      await runBackgroundScan();
       return BackgroundTaskResult.Success;
     } catch (error) {
       console.error('Failed to run background scan task', error);

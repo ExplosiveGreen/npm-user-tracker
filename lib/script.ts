@@ -320,6 +320,31 @@ const resumePendingHistories = (): void => {
   if (pending.length > 0) backfillVersionHistories(pending);
 };
 
+// Waits until the version-history backfill drains (or the budget runs out).
+// Used by the background task: unlike the foreground, which detaches the
+// backfill and stays interactive, the headless task holds its OS execution
+// window open so histories actually finish while the app is closed. Whatever
+// doesn't fit in the budget stays queued and resumes on the next run.
+const drainPendingHistories = async (budgetMs: number): Promise<void> => {
+  const deadline = Date.now() + budgetMs;
+  while (getPendingHistories().length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+};
+
+// One full background execution: finish anything a killed session left behind
+// (interrupted jobs resume, failed jobs retry, backfill continues), sweep all
+// enabled users, then hold the execution window until histories drain. Every
+// step is idempotent and durable, so an OS kill mid-run just means the next
+// run continues — closing the app never loses a scan.
+export const runBackgroundScan = async (): Promise<void> => {
+  await recoverInterruptedScans();
+  await scanAllEnabled();
+  // ~8 minutes: fits inside Android's ~10-minute JobScheduler window; on iOS
+  // the OS kills earlier anyway and the remainder resumes next run.
+  await drainPendingHistories(8 * 60_000);
+};
+
 // Upserts the `insecure` flag used by the package-flags join.
 const ensureInsecureFlag = (): string => {
   upsert(flagsCollection, "insecure", { id: "insecure", name: "insecure" });
