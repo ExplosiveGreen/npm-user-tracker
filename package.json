@@ -55,6 +55,7 @@
   },
   "scripts": {
     "start": "expo start",
+    "postinstall": "node -e \"require('fs').mkdirSync('node_modules/react-native-worklets/.worklets',{recursive:true})\"",
     "typecheck": "tsc --noEmit",
     "doctor": "bunx expo-doctor",
     "test:e2e": "node scripts/e2e.mjs"
