@@ -1,7 +1,7 @@
 {
   "name": "npm-user-tracker",
   "main": "expo-router/entry",
-  "version": "1.0.0-alpha.6",
+  "version": "1.0.0-alpha.4",
   "dependencies": {
     "@expo/ui": "~57.0.22",
     "@rn-primitives/label": "^1.5.2",
