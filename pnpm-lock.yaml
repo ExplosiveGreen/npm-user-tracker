@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  metro@0.84.5: c818cfbc248a2407e7069eff3af5ee57d115f495a0f18e7ebe9e14a11b6fa85d
+
 importers:
 
   .:
@@ -4633,7 +4636,7 @@ snapshots:
 
   '@expo/metro@56.0.2':
     dependencies:
-      metro: 0.84.5
+      metro: 0.84.5(patch_hash=c818cfbc248a2407e7069eff3af5ee57d115f495a0f18e7ebe9e14a11b6fa85d)
       metro-babel-transformer: 0.84.5
       metro-cache: 0.84.5
       metro-cache-key: 0.84.5
@@ -5088,7 +5091,7 @@ snapshots:
       '@react-native/dev-middleware': 0.86.3
       debug: 4.4.3
       invariant: 2.2.4
-      metro: 0.84.5
+      metro: 0.84.5(patch_hash=c818cfbc248a2407e7069eff3af5ee57d115f495a0f18e7ebe9e14a11b6fa85d)
       metro-config: 0.84.5
       metro-core: 0.84.5
       semver: 7.8.5
@@ -6429,7 +6432,7 @@ snapshots:
       connect: 3.7.0
       flow-enums-runtime: 0.0.6
       jest-validate: 29.7.0
-      metro: 0.84.5
+      metro: 0.84.5(patch_hash=c818cfbc248a2407e7069eff3af5ee57d115f495a0f18e7ebe9e14a11b6fa85d)
       metro-cache: 0.84.5
       metro-core: 0.84.5
       metro-runtime: 0.84.5
@@ -6516,7 +6519,7 @@ snapshots:
       '@babel/parser': 7.29.8
       '@babel/types': 7.29.8
       flow-enums-runtime: 0.0.6
-      metro: 0.84.5
+      metro: 0.84.5(patch_hash=c818cfbc248a2407e7069eff3af5ee57d115f495a0f18e7ebe9e14a11b6fa85d)
       metro-babel-transformer: 0.84.5
       metro-cache: 0.84.5
       metro-cache-key: 0.84.5
@@ -6529,7 +6532,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  metro@0.84.5:
+  metro@0.84.5(patch_hash=c818cfbc248a2407e7069eff3af5ee57d115f495a0f18e7ebe9e14a11b6fa85d):
     dependencies:
       '@babel/code-frame': 7.29.7
       '@babel/core': 7.29.7
