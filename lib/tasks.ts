@@ -8,28 +8,31 @@ export const SCAN_TASK_NAME = 'scan-npm-users';
 
 const SCAN_INTERVAL_KEY = 'scan-interval-minutes';
 export const DEFAULT_SCAN_INTERVAL_MINUTES = 60;
-
-// Android enforces a 15-minute minimum and batches jobs to save battery; iOS
+// Android enforces a 15-minute floor and batches jobs to save battery; iOS
 // decides its own windows (often once a day) no matter what is requested.
-export const SCAN_INTERVAL_OPTIONS = [
-  { minutes: 15, label: '15 min' },
-  { minutes: 60, label: 'Hourly' },
-  { minutes: 360, label: '6 hours' },
-  { minutes: 720, label: '12 hours' },
-  { minutes: 1440, label: 'Daily' },
+export const MIN_SCAN_INTERVAL_MINUTES = 15;
+
+export const SCAN_INTERVAL_UNITS = [
+  { unit: 'minutes', label: 'Minutes', factor: 1 },
+  { unit: 'hours', label: 'Hours', factor: 60 },
+  { unit: 'days', label: 'Days', factor: 1440 },
+  { unit: 'weeks', label: 'Weeks', factor: 10_080 },
+  { unit: 'months', label: 'Months', factor: 43_200 },
 ] as const;
+
+export type ScanIntervalUnit = (typeof SCAN_INTERVAL_UNITS)[number]['unit'];
 
 export function getScanIntervalMinutes(): number {
   const stored = Number(getPref(SCAN_INTERVAL_KEY));
-  if (SCAN_INTERVAL_OPTIONS.some((option) => option.minutes === stored)) return stored;
+  if (Number.isInteger(stored) && stored >= MIN_SCAN_INTERVAL_MINUTES) return stored;
   return DEFAULT_SCAN_INTERVAL_MINUTES;
 }
 
 // Persists the schedule and re-registers the OS task so the new interval
 // applies without restarting the app.
 export async function setScanIntervalMinutes(minutes: number): Promise<void> {
-  if (!SCAN_INTERVAL_OPTIONS.some((option) => option.minutes === minutes)) {
-    throw new Error(`Unsupported scan interval: ${minutes}`);
+  if (!Number.isInteger(minutes) || minutes < MIN_SCAN_INTERVAL_MINUTES) {
+    throw new Error(`Scan interval must be at least ${MIN_SCAN_INTERVAL_MINUTES} minutes`);
   }
   setPref(SCAN_INTERVAL_KEY, String(minutes));
   await registerScanTask();
