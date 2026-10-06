@@ -1,11 +1,11 @@
-appId: host.exp.exponent
+appId: com.anonymous.npmusertracker
 name: wrong-username-deletes-user-result
 ---
 # Runs after the harness force-ran the OS background task: the queued scan for
-# the fake username has now executed. Reopen the app and verify the no-data
-# outcome plus the delete-user prompt. (No retry loop: retry only requeues
-# now, so a transient registry error would need another forced run.)
-- openLink: exp://127.0.0.1:8081
+# the fake username has now executed. Bring the app forward and verify the
+# no-data outcome plus the delete-user prompt. (No retry loop: retry only
+# requeues now, so a transient registry error would need another forced run.)
+- launchApp:
 - extendedWaitUntil:
     visible:
       id: "delete-user-button"

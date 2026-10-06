@@ -1,10 +1,10 @@
-appId: host.exp.exponent
+appId: com.anonymous.npmusertracker
 name: online-retry-populates-tables-result
 ---
 # Runs after the harness force-ran the OS background task back online: the
-# requeued retry has now executed. Verify the success state and that every
-# table received at least one row.
-- openLink: exp://127.0.0.1:8081
+# requeued retry has now executed. Bring the app forward and verify the
+# success state and that every table received at least one row.
+- launchApp:
 # Histories backfill after the job succeeds, so allow time for that.
 - extendedWaitUntil:
     visible: "Done: instafluff.*"
@@ -19,7 +19,7 @@ name: online-retry-populates-tables-result
 # Navigate to the DB explorer and confirm each table has data. Deep-linking to
 # the route is more reliable than tapping the on-screen link while the home
 # layout is still settling after the scan.
-- openLink: exp://127.0.0.1:8081/--/db
+- openLink: mynpm://db
 - extendedWaitUntil:
     visible: "npm_users"
     timeout: 15000
@@ -27,29 +27,29 @@ name: online-retry-populates-tables-result
 # Each table rows are rendered as cards numbered from #1, so a visible #1 proves
 # the table is not empty without depending on any specific package or count.
 # Deep-linking to each table route avoids tapping through the long table list.
-- openLink: exp://127.0.0.1:8081/--/db/npm_users
+- openLink: mynpm://db/npm_users
 - extendedWaitUntil:
     visible: "#1"
     timeout: 15000
 
-- openLink: exp://127.0.0.1:8081/--/db/packages
+- openLink: mynpm://db/packages
 - extendedWaitUntil:
     visible: "#1"
     timeout: 15000
 
 # package_versions is only written by the version-history backfill, so a row
 # here proves release history was fetched from the registry.
-- openLink: exp://127.0.0.1:8081/--/db/package_versions
+- openLink: mynpm://db/package_versions
 - extendedWaitUntil:
     visible: "#1"
     timeout: 15000
 
-- openLink: exp://127.0.0.1:8081/--/db/scans
+- openLink: mynpm://db/scans
 - extendedWaitUntil:
     visible: "#1"
     timeout: 15000
 
-- openLink: exp://127.0.0.1:8081/--/db/jobs
+- openLink: mynpm://db/jobs
 - extendedWaitUntil:
     visible: "#1"
     timeout: 15000

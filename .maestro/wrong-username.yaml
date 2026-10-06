@@ -1,22 +1,13 @@
-appId: host.exp.exponent
+appId: com.anonymous.npmusertracker
 name: wrong-username-deletes-user
 ---
 # Starts from a clean install (empty DB) to mirror the manual clean-slate test.
 # Expo Go's data is cleared, then the project is opened from the local Metro
 # bundler (adb reverse port 8081) so the app boots with a fresh database.
+# Starts from a clean install (empty DB). Release build boots straight home —
+# no Expo Go onboarding to dismiss.
 - launchApp:
     clearState: true
-- openLink: exp://127.0.0.1:8081
-# Dismiss Expo Go's first-launch dev-menu onboarding if it appears, then close
-# the dev menu sheet that follows it so the app content is reachable.
-- tapOn:
-    text: "Continue"
-    optional: true
-- runFlow:
-    when:
-      visible: "Go home"
-    commands:
-      - back
 - extendedWaitUntil:
     visible:
       id: "username-input"

@@ -1,4 +1,4 @@
-appId: host.exp.exponent
+appId: com.anonymous.npmusertracker
 name: username-suggestions
 ---
 # Typing a username prefix shows up to 5 real-maintainer suggestions from the
@@ -6,17 +6,6 @@ name: username-suggestions
 # auto-tracked), and "Add user" then tracks it.
 - launchApp:
     clearState: true
-- openLink: exp://127.0.0.1:8081
-# Dismiss Expo Go's first-launch dev-menu onboarding if it appears, then close
-# the dev menu sheet that follows it so the app content is reachable.
-- tapOn:
-    text: "Continue"
-    optional: true
-- runFlow:
-    when:
-      visible: "Go home"
-    commands:
-      - back
 - extendedWaitUntil:
     visible:
       id: "username-input"

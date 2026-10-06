@@ -1,4 +1,4 @@
-appId: host.exp.exponent
+appId: com.anonymous.npmusertracker
 name: username-suggestions-add
 ---
 # Continues username-suggestions.yaml after `adb shell input text t3dot`

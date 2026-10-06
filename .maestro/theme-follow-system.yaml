@@ -1,24 +1,13 @@
-appId: host.exp.exponent
+appId: com.anonymous.npmusertracker
 name: theme-follows-system-and-pins-override
 ---
 # Runs with the device OS in DARK mode (forced by scripts/e2e.mjs via
-# `adb shell cmd uimode night yes` before this flow). Fresh Expo Go state, no
+# `adb shell cmd uimode night yes` before this flow). Fresh install, no
 # stored preference, so the page follows the dark OS. Also covers the reverse
 # direction: pinning LIGHT over a dark system (an informed override rather than
 # a release) and then releasing it back.
 - launchApp:
     clearState: true
-- openLink: exp://127.0.0.1:8081
-# Dismiss Expo Go's first-launch dev-menu onboarding if it appears, then close
-# the dev menu sheet that follows it so the app content is reachable.
-- tapOn:
-    text: "Continue"
-    optional: true
-- runFlow:
-    when:
-      visible: "Go home"
-    commands:
-      - back
 - extendedWaitUntil:
     visible:
       id: "username-input"

@@ -1,24 +1,13 @@
-appId: host.exp.exponent
+appId: com.anonymous.npmusertracker
 name: theme-toggle-pins-and-releases
 ---
 # Runs with the device OS in LIGHT mode (forced by scripts/e2e.mjs via
-# `adb shell cmd uimode night no` before this flow). Starts from a clean Expo Go
-# state, so the app has no stored preference and follows the OS. Exercises the
+# `adb shell cmd uimode night no` before this flow). Starts from a clean
+# install, so the app has no stored preference and follows the OS. Exercises the
 # Lea Verou toggle contract: pin the opposite scheme, then release back to the
 # OS when the target coincides with the system again.
 - launchApp:
     clearState: true
-- openLink: exp://127.0.0.1:8081
-# Dismiss Expo Go's first-launch dev-menu onboarding if it appears, then close
-# the dev menu sheet that follows it so the app content is reachable.
-- tapOn:
-    text: "Continue"
-    optional: true
-- runFlow:
-    when:
-      visible: "Go home"
-    commands:
-      - back
 - extendedWaitUntil:
     visible:
       id: "username-input"
@@ -33,9 +22,6 @@ name: theme-toggle-pins-and-releases
     enabled: true
 
 # Flip to dark: target (light -> dark) differs from the OS, so it is pinned.
-# The repeat retries the switch press if Expo Go's dev menu pops over the app
-# right after a fresh launch; dismissing it and pressing again works only because
-# the press is targeted by testID, not by screen coordinates.
 - repeat:
     while:
       notVisible: "Set to dark"

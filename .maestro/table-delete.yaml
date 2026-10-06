@@ -1,11 +1,11 @@
-appId: host.exp.exponent
+appId: com.anonymous.npmusertracker
 name: table-delete-removes-row
 ---
 # Run after online-retry.yaml, which leaves a single npm user (instafluff)
 # persisted along with its scans and job rows. Deep-link to the npm_users table
 # screen and use the Delete button on the row's card; the row must disappear, and
 # every row connected to it (scans, jobs) must be deleted too.
-- openLink: exp://127.0.0.1:8081/--/db/npm_users
+- openLink: mynpm://db/npm_users
 - extendedWaitUntil:
     visible: "username : instafluff"
     timeout: 15000
@@ -18,11 +18,11 @@ name: table-delete-removes-row
 
 # The npm_users row is gone. Cascade deletion must have removed the scans and
 # jobs that referenced it, so both tables must now be empty.
-- openLink: exp://127.0.0.1:8081/--/db/scans
+- openLink: mynpm://db/scans
 - extendedWaitUntil:
     notVisible: "#1"
     timeout: 15000
-- openLink: exp://127.0.0.1:8081/--/db/jobs
+- openLink: mynpm://db/jobs
 - extendedWaitUntil:
     notVisible: "#1"
     timeout: 15000

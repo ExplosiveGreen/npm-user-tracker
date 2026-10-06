@@ -1,4 +1,4 @@
-appId: host.exp.exponent
+appId: com.anonymous.npmusertracker
 name: online-retry-queues-job
 ---
 # Run after scripts/e2e.mjs has restored the network following the offline-add
@@ -7,6 +7,7 @@ name: online-retry-queues-job
 # the network returned — so only tap when the retry button is still there.
 # Either way the harness force-runs the background job next, then
 # online-retry-result asserts the populated tables.
+- launchApp:
 - runFlow:
     when:
       visible:
