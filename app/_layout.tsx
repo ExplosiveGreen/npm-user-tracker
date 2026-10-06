@@ -5,11 +5,10 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { Platform } from 'react-native';
-import { registerTaskAsync } from 'expo-background-task';
 import '@/lib/tasks';
 import { ThemeProvider, useTheme } from '@/lib/theme-provider';
 import { THEME } from '@/lib/theme';
-import { SCAN_TASK_NAME } from '@/lib/tasks';
+import { registerScanTask } from '@/lib/tasks';
 
 function ThemedRoot() {
   const { resolved } = useTheme();
@@ -32,7 +31,9 @@ function ThemedRoot() {
 export default function RootLayout() {
   useEffect(() => {
     if (Platform.OS === 'web') return;
-    registerTaskAsync(SCAN_TASK_NAME, {}).catch((error) => {
+    // Registers the OS-scheduled scan with the user's saved interval, so
+    // tracking continues even when the app is closed.
+    registerScanTask().catch((error) => {
       console.warn('Background task registration skipped', error);
     });
   }, []);

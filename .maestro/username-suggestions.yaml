@@ -1,0 +1,44 @@
+appId: host.exp.exponent
+name: username-suggestions
+---
+# Typing a username prefix shows up to 5 real-maintainer suggestions from the
+# bundled list; tapping one only fills the input (suggestions are never
+# auto-tracked), and "Add user" then tracks it.
+- launchApp:
+    clearState: true
+- openLink: exp://127.0.0.1:8081
+# Dismiss Expo Go's first-launch dev-menu onboarding if it appears, then close
+# the dev menu sheet that follows it so the app content is reachable.
+- tapOn:
+    text: "Continue"
+    optional: true
+- runFlow:
+    when:
+      visible: "Go home"
+    commands:
+      - back
+- extendedWaitUntil:
+    visible:
+      id: "username-input"
+    timeout: 120000
+
+# Typing a prefix surfaces the suggestion dropdown with the real username.
+- tapOn:
+    id: "username-input"
+- inputText: "t3dot"
+- extendedWaitUntil:
+    visible:
+      id: "username-suggestions"
+    timeout: 10000
+- assertVisible: "t3dotgg"
+
+# Suggestions are suggestions-only: nothing is tracked until "Add user".
+- assertNotVisible: "username : t3dotgg"
+
+# Tapping the suggestion fills the input; adding tracks the user.
+- tapOn: "t3dotgg"
+- tapOn:
+    id: "add-user"
+- extendedWaitUntil:
+    visible: "username : t3dotgg"
+    timeout: 20000

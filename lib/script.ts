@@ -1,5 +1,8 @@
-import { safeRandomUUID } from '@tanstack/db';
-import type { ObjectsEntity, PackageInfo, scanResult } from '@/types';
+import { Data, Effect, Schedule, Schema } from "effect";
+import { safeRandomUUID } from "@tanstack/db";
+import type { ObjectsEntity, scanResult } from "@/types";
+import { notifyReleases } from "@/lib/notifications";
+import { PackageTime, SearchResponse } from "@/lib/registry-schema";
 import {
   jobsCollection,
   npmUsersCollection,
@@ -12,9 +15,28 @@ import {
   flagsCollection,
   packageFlagsCollection,
   type Job,
-} from '@/db';
+} from "@/db";
 
-const NPM_SEARCH_URL = 'https://registry.npmjs.org/-/v1/search';
+const NPM_SEARCH_URL = "https://registry.npmjs.org/-/v1/search";
+
+// Single typed failure for the whole scan pipeline. Every fallible step maps
+// into it, so job rows always get a human-readable message.
+export class ScanError extends Data.TaggedError("ScanError")<{
+  readonly operation: string;
+  readonly message: string;
+}> {}
+
+export interface Release {
+  packageId: string;
+  version: string;
+  isNewPackage: boolean;
+}
+
+// Two attempts after the first, two seconds apart — enough for transient
+// mobile-network blips without stalling background scans.
+const retryPolicy = Schedule.recurs(2).pipe(
+  Schedule.addDelay(() => Effect.succeed("2 seconds" as const)),
+);
 
 // npm_users can hold the same username under different ids when a discovered
 // co-maintainer is later added explicitly, so look users up by username and
@@ -26,20 +48,79 @@ const loadUsersByUsername = async (): Promise<Map<string, string>> => {
   return byUsername;
 };
 
-// Fetches one of the two npm registry search results. The registry response
+// Fetches and validates untrusted registry JSON. Retries transient network
+// failures; schema mismatches fail immediately (retrying won't help).
+const fetchJson = (url: string, operation: string): Effect.Effect<unknown, ScanError> =>
+  Effect.tryPromise({
+    try: () =>
+      fetch(url, { signal: AbortSignal.timeout(30_000) }).then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`status ${response.status}`);
+        }
+        return (await response.json()) as unknown;
+      }),
+    catch: (cause) =>
+      new ScanError({
+        operation,
+        message: cause instanceof Error ? cause.message : String(cause),
+      }),
+  }).pipe(Effect.retry(retryPolicy));
+
+// One of the two npm registry search results. The registry response
 // (`objects`, `total`, `time`) does not include the query kind, so the caller
 // supplies `type: 'author' | 'maintainer'` to build a full `scanResult`.
-export const fetchScan = async (
-  type: scanResult['type'],
+const fetchScan = (
+  type: scanResult["type"],
   username: string,
-): Promise<scanResult> => {
-  const response = await fetch(`${NPM_SEARCH_URL}?text=${type}:${encodeURIComponent(username)}`);
-  if (!response.ok) {
-    throw new Error(`npm search for "${username}" failed with status ${response.status}`);
-  }
-  const body = (await response.json()) as Omit<scanResult, 'type'>;
-  return { ...body, type };
-};
+): Effect.Effect<scanResult, ScanError> =>
+  Effect.gen(function* () {
+    const operation = `npm search for "${username}"`;
+    const json = yield* fetchJson(
+      `${NPM_SEARCH_URL}?text=${type}:${encodeURIComponent(username)}`,
+      operation,
+    );
+    const decoded = yield* Schema.decodeEffect(SearchResponse)(
+      // Cast satisfies the decoder's input type; the Schema validates the
+      // actual content at runtime and fails on mismatch.
+      json as typeof SearchResponse.Encoded,
+    ).pipe(
+      Effect.mapError(
+        (issue) => new ScanError({ operation, message: `invalid registry response: ${String(issue)}` }),
+      ),
+    );
+    const objects: ObjectsEntity[] = decoded.objects.map((object) => ({
+      downloads: {
+        monthly: object.downloads.monthly,
+        weekly: object.downloads.weekly,
+      },
+      dependents: object.dependents,
+      updated: object.updated,
+      searchScore: object.searchScore,
+      package: {
+        name: object.package.name,
+        keywords: object.package.keywords ? [...object.package.keywords] : null,
+        version: object.package.version,
+        sanitized_name: object.package.sanitized_name,
+        publisher: { ...object.package.publisher },
+        maintainers: object.package.maintainers ? object.package.maintainers.map((m) => ({ ...m })) : null,
+        license: object.package.license ?? null,
+        date: object.package.date,
+        links: {
+          npm: object.package.links.npm,
+          homepage: object.package.links.homepage ?? null,
+          repository: object.package.links.repository ?? null,
+          bugs: object.package.links.bugs ?? null,
+        },
+        description: object.package.description ?? null,
+      },
+      score: {
+        final: object.score.final,
+        detail: { ...object.score.detail },
+      },
+      flags: { insecure: object.flags?.insecure ?? 0 },
+    }));
+    return { objects, total: decoded.total, time: decoded.time, type };
+  });
 
 // Ensures a username/email pair is present in npm_users (used for the scanned
 // user's co-maintainers and the package publisher) so relations can reference
@@ -78,13 +159,15 @@ const upsert = <T extends object>(
 };
 
 // Packages are keyed by their unique npm name, so re-scanning a user upserts
-// instead of duplicating rows. Returns the package id (the name) and whether the
+// instead of duplicating rows. Returns the package id (the name), whether the
 // package is new or its version changed since the last scan, so the caller can
-// refresh the tracked version history.
-const upsertPackage = (object: ObjectsEntity): { id: string; versionChanged: boolean } => {
+// refresh the tracked version history. `isNewPackage` is true only when no row
+// existed before this scan.
+const upsertPackage = (object: ObjectsEntity): { id: string; versionChanged: boolean; isNewPackage: boolean } => {
   const pkg = object.package;
   const existing = packagesCollection.get(pkg.name);
-  const versionChanged = !existing || existing.version !== pkg.version;
+  const isNewPackage = !existing;
+  const versionChanged = isNewPackage || existing.version !== pkg.version;
   upsert(
     packagesCollection,
     pkg.name,
@@ -104,139 +187,281 @@ const upsertPackage = (object: ObjectsEntity): { id: string; versionChanged: boo
       publisherId: pkg.publisher?.username ?? null,
     },
   );
-  return { id: pkg.name, versionChanged };
+  return { id: pkg.name, versionChanged, isNewPackage };
 };
 
-// Fetches the full metadata for one package and records the release date of every
-// published version in package_versions. `created` and `modified` are registry
-// bookkeeping timestamps, not versions, so they are skipped. Versions are upserted
-// so overlapping author/maintainer scans and re-scans only fill in missing rows.
-const syncPackageVersions = async (packageId: string): Promise<void> => {
-  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageId)}`);
-  if (!response.ok) {
-    throw new Error(`fetching versions for "${packageId}" failed with status ${response.status}`);
-  }
-  const { time } = (await response.json()) as PackageInfo;
-  if (!time) return;
-  await packageVersionsCollection.preload();
-  for (const [version, date] of Object.entries(time)) {
-    if (version === 'created' || version === 'modified') continue;
-    upsert(packageVersionsCollection, `${packageId}/${version}`, { packageId, version, date });
-  }
+// The metadata document's `time` map (version → release date), or an empty
+// record when the field is missing. The cast only satisfies the decoder's
+// input type — the Schema validates the actual content.
+const toTimeRecord = (json: unknown): Record<string, string> => {
+  const time = (json as { time?: unknown }).time;
+  if (typeof time === "object" && time !== null) return time as Record<string, string>;
+  return {};
 };
+
+// Records the release date of every published version in package_versions.
+// `created` and `modified` are registry bookkeeping timestamps, not versions,
+// so they are skipped. Only the `time` map is decoded — the full metadata
+// document can be megabytes. Versions are upserted so overlapping
+// author/maintainer scans and re-scans only fill in missing rows.
+const syncPackageVersions = (packageId: string): Effect.Effect<void, ScanError> =>
+  Effect.gen(function* () {
+    const operation = `fetching versions for "${packageId}"`;
+    const json = yield* fetchJson(
+      `https://registry.npmjs.org/${encodeURIComponent(packageId)}`,
+      operation,
+    );
+    const time = yield* Schema.decodeEffect(PackageTime)(toTimeRecord(json)).pipe(
+      Effect.mapError(
+        (issue) => new ScanError({ operation, message: `invalid version history: ${String(issue)}` }),
+      ),
+    );
+    yield* Effect.promise(() => packageVersionsCollection.preload());
+    yield* Effect.sync(() => {
+      for (const [version, date] of Object.entries(time)) {
+        if (version === "created" || version === "modified") continue;
+        upsert(packageVersionsCollection, `${packageId}/${version}`, { packageId, version, date });
+      }
+    });
+  });
 
 // Upserts the `insecure` flag used by the package-flags join.
 const ensureInsecureFlag = (): string => {
-  upsert(flagsCollection, 'insecure', { id: 'insecure', name: 'insecure' });
-  return 'insecure';
+  upsert(flagsCollection, "insecure", { id: "insecure", name: "insecure" });
+  return "insecure";
 };
 
-// Writes one scan (author or maintainer) plus all of its related rows into the
-// schema tables.
-const persistScan = async (npmUserId: string, scan: scanResult): Promise<void> => {
-  const scanId = safeRandomUUID();
-  scansCollection.insert({
-    id: scanId,
-    npmUserId,
-    type: scan.type,
-    scannedAt: new Date().toISOString(),
-    total: scan.total,
-  });
+// Persists one search object plus its related rows. The version-history sync
+// is best-effort — one missing package must not fail the whole user scan —
+// so its failure is logged and the release is still reported from the search
+// result's version.
+const processSearchObject = (
+  scanId: string,
+  object: ObjectsEntity,
+  byUsername: Map<string, string>,
+): Effect.Effect<Release | null, ScanError> =>
+  Effect.gen(function* () {
+    const { id: packageId, versionChanged, isNewPackage } = yield* Effect.sync(() =>
+      upsertPackage(object),
+    );
 
-  await packagesCollection.preload();
-  await packageMaintainersCollection.preload();
-  await packageKeywordsCollection.preload();
-  const byUsername = await loadUsersByUsername();
-
-  for (const object of scan.objects) {
-    const { id: packageId, versionChanged } = upsertPackage(object);
-
+    let release: Release | null = null;
     if (versionChanged) {
-      await syncPackageVersions(packageId);
+      yield* syncPackageVersions(packageId).pipe(
+        Effect.matchEffect({
+          // The job still records the new version from the search result
+          // even when the full history fetch fails.
+          onFailure: (error) =>
+            Effect.sync(() => {
+              console.warn(`Version history sync skipped for "${packageId}"`, error.message);
+            }),
+          onSuccess: () => Effect.void,
+        }),
+      );
+      release = { packageId, version: object.package.version, isNewPackage };
     }
 
-    const scanPackageId = safeRandomUUID();
-    scanPackagesCollection.insert({
-      id: scanPackageId,
-      packageId,
-      scanId,
-      weeklyDownloads: object.downloads.weekly,
-      monthlyDownloads: object.downloads.monthly,
-      dependents:
-        typeof object.dependents === 'number' ? object.dependents : Number(object.dependents) || null,
-      searchScore: object.searchScore,
-      finalScore: object.score.final,
-      popularityScore: object.score.detail.popularity,
-      qualityScore: object.score.detail.quality,
-      maintenanceScore: object.score.detail.maintenance,
-    });
+    yield* Effect.sync(() => {
+      const scanPackageId = safeRandomUUID();
+      scanPackagesCollection.insert({
+        id: scanPackageId,
+        packageId,
+        scanId,
+        weeklyDownloads: object.downloads.weekly,
+        monthlyDownloads: object.downloads.monthly,
+        dependents:
+          typeof object.dependents === "number" ? object.dependents : Number(object.dependents) || null,
+        searchScore: object.searchScore,
+        finalScore: object.score.final,
+        popularityScore: object.score.detail.popularity,
+        qualityScore: object.score.detail.quality,
+        maintenanceScore: object.score.detail.maintenance,
+      });
 
-    const insecureFlagId = ensureInsecureFlag();
-    packageFlagsCollection.insert({
-      scanPackageId,
-      flagId: insecureFlagId,
-      value: Boolean(object.flags?.insecure),
-    });
+      const insecureFlagId = ensureInsecureFlag();
+      packageFlagsCollection.insert({
+        scanPackageId,
+        flagId: insecureFlagId,
+        value: Boolean(object.flags?.insecure),
+      });
 
-    for (const keyword of object.package.keywords ?? []) {
-      if (!keyword) continue;
-      upsert(packageKeywordsCollection, `${packageId}/${keyword}`, { packageId, keyword });
-    }
+      for (const keyword of object.package.keywords ?? []) {
+        if (!keyword) continue;
+        upsert(packageKeywordsCollection, `${packageId}/${keyword}`, { packageId, keyword });
+      }
+    });
 
     for (const maintainer of object.package.maintainers ?? []) {
-      const maintainerId = await ensureUser(byUsername, maintainer.username, maintainer.email);
+      const maintainerId = yield* Effect.promise(() =>
+        ensureUser(byUsername, maintainer.username, maintainer.email),
+      );
       if (!maintainerId) continue;
-      upsert(packageMaintainersCollection, `${packageId}/${maintainerId}`, { packageId, userId: maintainerId });
+      yield* Effect.sync(() =>
+        upsert(packageMaintainersCollection, `${packageId}/${maintainerId}`, {
+          packageId,
+          userId: maintainerId,
+        }),
+      );
     }
-  }
-};
+
+    return release;
+  });
+
+// Writes one scan (author or maintainer) plus all of its related rows into the
+// schema tables. Returns the releases worth notifying about: new packages and
+// version bumps seen in this scan. Objects are processed with bounded
+// concurrency — each object's writes are synchronous and atomic, so fibers
+// only interleave on network I/O.
+const persistScan = (
+  npmUserId: string,
+  scan: scanResult,
+): Effect.Effect<Array<Release>, ScanError> =>
+  Effect.gen(function* () {
+    const scanId = safeRandomUUID();
+    yield* Effect.sync(() =>
+      scansCollection.insert({
+        id: scanId,
+        npmUserId,
+        type: scan.type,
+        scannedAt: new Date().toISOString(),
+        total: scan.total,
+      }),
+    );
+
+    yield* Effect.promise(() => packagesCollection.preload());
+    yield* Effect.promise(() => packageMaintainersCollection.preload());
+    yield* Effect.promise(() => packageKeywordsCollection.preload());
+    const byUsername = yield* Effect.promise(() => loadUsersByUsername());
+
+    const results = yield* Effect.forEach(scan.objects, (object) => processSearchObject(scanId, object, byUsername), {
+      concurrency: 5,
+    });
+    return results.filter((release): release is Release => release !== null);
+  });
 
 const setJob = (
   jobId: string,
   patch: Partial<
-    Pick<Job, 'status' | 'error' | 'authorTotal' | 'maintainerTotal' | 'startedAt' | 'finishedAt'>
+    Pick<Job, "status" | "error" | "authorTotal" | "maintainerTotal" | "startedAt" | "finishedAt">
   >,
 ): void => {
   jobsCollection.update(jobId, (draft) => Object.assign(draft, patch));
 };
 
-// Runs one tracked job to completion, driving its status as it goes: queued ->
-// running -> success | no-data | failed.
-export const processJob = async (jobId: string): Promise<void> => {
-  const job = jobsCollection.get(jobId);
-  if (!job) return;
-  if (job.status !== 'queued' && job.status !== 'failed') return;
-
-  const now = new Date().toISOString();
-  setJob(jobId, { status: 'running', error: null, startedAt: now, finishedAt: null });
-
-  try {
-    await loadUsersByUsername();
+// The fallible core of one tracked job. The first-ever scan for a user only
+// establishes the baseline and never notifies; later scans notify (when the
+// user is still enabled) about new packages and version bumps.
+const runScan = (job: Job): Effect.Effect<void, ScanError> =>
+  Effect.gen(function* () {
     const npmUser = npmUsersCollection.get(job.npmUserId);
     if (!npmUser) {
-      setJob(jobId, { status: 'failed', error: 'Tracked user was deleted', finishedAt: new Date().toISOString() });
-      return;
+      return yield* Effect.fail(
+        new ScanError({ operation: "scan", message: "Tracked user was deleted" }),
+      );
     }
 
-    const author = await fetchScan('author', npmUser.username);
-    const maintainer = await fetchScan('maintainer', npmUser.username);
+    yield* Effect.promise(() => scansCollection.preload());
+    const isBaseline = !scansCollection.toArray.some((scan) => scan.npmUserId === job.npmUserId);
+
+    const [author, maintainer] = yield* Effect.all(
+      [fetchScan("author", npmUser.username), fetchScan("maintainer", npmUser.username)],
+      { concurrency: 2 },
+    );
 
     if (author.total === 0 && maintainer.total === 0) {
-      setJob(jobId, { status: 'no-data', authorTotal: 0, maintainerTotal: 0, finishedAt: new Date().toISOString() });
+      yield* Effect.sync(() =>
+        setJob(job.id, {
+          status: "no-data",
+          authorTotal: 0,
+          maintainerTotal: 0,
+          finishedAt: new Date().toISOString(),
+        }),
+      );
       return;
     }
 
-    await persistScan(job.npmUserId, author);
-    await persistScan(job.npmUserId, maintainer);
+    const authorReleases = yield* persistScan(job.npmUserId, author);
+    const maintainerReleases = yield* persistScan(job.npmUserId, maintainer);
+    // The same package can appear in both scans; keep the first sighting so
+    // the notification counts it once.
+    const seen = new Set<string>();
+    const releases = [...authorReleases, ...maintainerReleases].filter((r) =>
+      seen.has(r.packageId) ? false : (seen.add(r.packageId), true),
+    );
 
-    setJob(jobId, {
-      status: 'success',
-      authorTotal: author.total,
-      maintainerTotal: maintainer.total,
-      finishedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error while scanning';
-    setJob(jobId, { status: 'failed', error: message, finishedAt: new Date().toISOString() });
-  }
+    yield* Effect.sync(() =>
+      setJob(job.id, {
+        status: "success",
+        authorTotal: author.total,
+        maintainerTotal: maintainer.total,
+        finishedAt: new Date().toISOString(),
+      }),
+    );
+
+    if (!isBaseline && npmUser.enable && releases.length > 0) {
+      // A failed notification must not fail the scan that already succeeded.
+      yield* notifyReleases(npmUser.username, releases).pipe(
+        Effect.matchEffect({
+          onFailure: () => Effect.void,
+          onSuccess: () => Effect.void,
+        }),
+      );
+    }
+  });
+
+// Runs one tracked job to completion, driving its status as it goes: queued ->
+// running -> success | no-data | failed. Promise-based at the boundary for the
+// UI and background task callers; Effect inside.
+export const processJob = (jobId: string): Promise<void> => {
+  const job = jobsCollection.get(jobId);
+  if (!job) return Promise.resolve();
+  if (job.status !== "queued" && job.status !== "failed") return Promise.resolve();
+
+  const now = new Date().toISOString();
+  setJob(jobId, { status: "running", error: null, startedAt: now, finishedAt: null });
+
+  return Effect.runPromise(
+    runScan(job).pipe(
+      Effect.matchEffect({
+        onFailure: (error) =>
+          Effect.sync(() =>
+            setJob(jobId, {
+              status: "failed",
+              error: error.message,
+              finishedAt: new Date().toISOString(),
+            }),
+          ),
+        onSuccess: () => Effect.void,
+      }),
+    ),
+  );
 };
+
+// Queues a fresh scan job for every enabled user and runs it. Used by the
+// "Check now" button and shared with the background task path.
+export const scanAllEnabled = (): Promise<void> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      yield* Effect.promise(() => npmUsersCollection.preload());
+      const enabled = npmUsersCollection.toArray.filter((user) => user.enable);
+      yield* Effect.forEach(enabled, (user) =>
+        Effect.gen(function* () {
+          const jobId = safeRandomUUID();
+          yield* Effect.sync(() =>
+            jobsCollection.insert({
+              id: jobId,
+              npmUserId: user.id,
+              status: "queued",
+              error: null,
+              authorTotal: 0,
+              maintainerTotal: 0,
+              createdAt: new Date().toISOString(),
+              startedAt: null,
+              finishedAt: null,
+            }),
+          );
+          yield* Effect.promise(() => processJob(jobId));
+        }),
+      );
+    }),
+  );

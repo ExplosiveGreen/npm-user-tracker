@@ -1,16 +1,37 @@
 import { safeRandomUUID } from '@tanstack/db';
 import { useLiveQuery } from '@tanstack/react-db';
-import { ThemeToggle } from '@/components/theme-toggle';
 import { ThemeToggleButton } from '@/components/theme-toggle-button';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Text } from '@/components/ui/text';
-import { jobsCollection, npmUsersCollection, type Job } from '@/db';
-import { processJob } from '@/lib/script';
-import { useState } from 'react';
-import { Alert, ScrollView, View } from 'react-native';
+import {
+  jobsCollection,
+  npmUsersCollection,
+  packagesCollection,
+  packageVersionsCollection,
+  scansCollection,
+  scanPackagesCollection,
+  type Job,
+} from '@/db';
+import {
+  getNotificationPermission,
+  notificationsSupported,
+  requestNotificationPermission,
+  type NotificationPermission,
+} from '@/lib/notifications';
+import { processJob, scanAllEnabled } from '@/lib/script';
+import { suggestUsernames } from '@/lib/suggestions';
+import {
+  getScanIntervalMinutes,
+  setScanIntervalMinutes,
+  MIN_SCAN_INTERVAL_MINUTES,
+  SCAN_INTERVAL_UNITS,
+  type ScanIntervalUnit,
+} from '@/lib/tasks';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Link, Stack } from 'expo-router';
 
@@ -29,8 +50,263 @@ const jobLabel = (job: Job, username: string): string => {
   }
 };
 
+const PAGE_SIZE = 5;
+const PAGE_GROWTH = 10;
+
+// Notification setup banner: explains that tracking = notifications, surfaces
+// the OS permission state, and offers a one-tap enable.
+function NotificationSetup() {
+  const [permission, setPermission] = useState<NotificationPermission | null>(null);
+  const supported = notificationsSupported();
+
+  useEffect(() => {
+    void getNotificationPermission()
+      .then(setPermission)
+      .catch(() => setPermission('denied'));
+  }, []);
+
+  if (!supported) return null;
+  if (permission === 'granted') return null;
+
+  return (
+    <Card className="w-full">
+      <CardHeader>
+        <CardTitle>Notifications off</CardTitle>
+      </CardHeader>
+      <CardContent className="gap-2">
+        <Text className="text-muted-foreground text-sm">
+          Enable notifications to get alerted when a tracked author publishes a new release.
+        </Text>
+        <Button
+          testID="enable-notifications"
+          onPress={() =>
+            void requestNotificationPermission().then((granted) =>
+              setPermission(granted ? 'granted' : 'denied'),
+            )
+          }
+        >
+          <Text>Enable notifications</Text>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Scan schedule control: a number plus a unit (minutes to months), persisted
+// and re-registered with the OS task so rescans happen even when the app is
+// closed. The OS treats the interval as a minimum — Android batches jobs to
+// save battery (15-minute floor) and iOS runs them on its own windows.
+function ScanSchedule() {
+  const initial = splitMinutes(getScanIntervalMinutes());
+  const [amount, setAmount] = useState(String(initial.amount));
+  const [unit, setUnit] = useState<ScanIntervalUnit>(initial.unit);
+  const [savedMinutes, setSavedMinutes] = useState(getScanIntervalMinutes());
+  const [error, setError] = useState<string | null>(null);
+
+  const apply = () => {
+    const n = Number(amount);
+    if (!Number.isInteger(n) || n < 1) {
+      setError('Enter a whole number of 1 or more.');
+      return;
+    }
+    const factor = SCAN_INTERVAL_UNITS.find((u) => u.unit === unit)!.factor;
+    const total = n * factor;
+    if (total < MIN_SCAN_INTERVAL_MINUTES) {
+      setError(`That is under the ${MIN_SCAN_INTERVAL_MINUTES}-minute minimum the OS allows.`);
+      return;
+    }
+    setError(null);
+    void setScanIntervalMinutes(total).then(
+      () => setSavedMinutes(total),
+      () => setError('Could not reschedule — try again.'),
+    );
+  };
+
+  return (
+    <View className="gap-2">
+      <Text className="text-lg font-semibold">Scan schedule</Text>
+      <Text className="text-muted-foreground text-sm">
+        Currently: every {describeMinutes(savedMinutes)}.
+      </Text>
+      <View className="flex-row gap-2">
+        <View className="w-24">
+          <Input
+            testID="scan-interval-number"
+            value={amount}
+            onChangeText={(v) => {
+              setAmount(v.replace(/[^0-9]/g, ''));
+              setError(null);
+            }}
+            keyboardType="number-pad"
+            placeholder="1"
+          />
+        </View>
+        <View className="flex-1 flex-row flex-wrap gap-2">
+          {SCAN_INTERVAL_UNITS.map((option) => (
+            <Button
+              key={option.unit}
+              testID={`scan-unit-${option.unit}`}
+              variant={option.unit === unit ? 'default' : 'outline'}
+              size="sm"
+              onPress={() => setUnit(option.unit)}
+            >
+              <Text>{option.label}</Text>
+            </Button>
+          ))}
+        </View>
+      </View>
+      {error ? <Text className="text-destructive text-xs">{error}</Text> : null}
+      <Button testID="scan-interval-apply" variant="outline" onPress={apply}>
+        <Text>Apply schedule</Text>
+      </Button>
+      <Text className="text-muted-foreground text-xs">
+        Enabled authors are rescanned automatically, even with the app closed.
+        The exact timing is up to the OS. The switch on each author is the
+        notification opt-out.
+      </Text>
+    </View>
+  );
+}
+
+// Expresses stored minutes in the largest whole unit (a month counts 30 days).
+// Anything that does not divide evenly falls back to plain minutes.
+function splitMinutes(minutes: number): { amount: number; unit: ScanIntervalUnit } {
+  for (const option of [...SCAN_INTERVAL_UNITS].reverse()) {
+    if (minutes % option.factor === 0) {
+      return { amount: minutes / option.factor, unit: option.unit };
+    }
+  }
+  return { amount: minutes, unit: 'minutes' };
+}
+
+// Short human label for the saved interval ("90 minutes", "6 hours", ...).
+function describeMinutes(minutes: number): string {
+  const { amount, unit } = splitMinutes(minutes);
+  const label = SCAN_INTERVAL_UNITS.find((u) => u.unit === unit)!.label.toLowerCase();
+  return `${amount} ${amount === 1 ? label.replace(/s$/, '') : label}`;
+}
+
+// Release history: the newest package versions across all tracked packages.
+// package_versions is the source of truth — every version bump recorded by a
+// scan lands here with its registry date.
+function RecentUpdates() {
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const { data: versions } = useLiveQuery((q) => q.from({ v: packageVersionsCollection }));
+  const { data: packages } = useLiveQuery((q) => q.from({ p: packagesCollection }));
+
+  const publisherByPackage = new Map((packages ?? []).map((p) => [p.id, p.publisherId]));
+  const sorted = (versions ?? [])
+    .slice()
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const visible = sorted.slice(0, limit);
+  const remaining = sorted.length - visible.length;
+
+  if (sorted.length === 0) {
+    return (
+      <Card className="w-full">
+        <CardContent>
+          <Text className="text-muted-foreground text-sm">
+            No releases yet. Add an npm user above and their latest releases will show up here.
+          </Text>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <View className="gap-2">
+      {visible.map((v) => (
+        <Card key={`${v.packageId}/${v.version}`} className="w-full">
+          <CardContent className="flex-row items-center justify-between">
+            <View className="flex-1 gap-0.5">
+              <Text className="font-medium">{v.packageId}</Text>
+              <Text className="text-muted-foreground text-xs">
+                {publisherByPackage.get(v.packageId) ?? 'unknown author'}
+              </Text>
+            </View>
+            <View className="items-end gap-0.5">
+              <Text className="text-sm">{v.version}</Text>
+              <Text className="text-muted-foreground text-xs">{v.date.slice(0, 10)}</Text>
+            </View>
+          </CardContent>
+        </Card>
+      ))}
+      {remaining > 0 && (
+        <Button testID="show-more-updates" variant="outline" onPress={() => setLimit((l) => l + PAGE_GROWTH)}>
+          <Text>Show more ({remaining} left)</Text>
+        </Button>
+      )}
+    </View>
+  );
+}
+
+// Packages this app discovered most recently, newest first. Discovery time is
+// the earliest scan that reported the package (via its scan_packages rows),
+// not the registry publish date.
+function RecentlyAdded() {
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const { data: scans } = useLiveQuery((q) => q.from({ s: scansCollection }));
+  const { data: scanPackages } = useLiveQuery((q) => q.from({ sp: scanPackagesCollection }));
+  const { data: packages } = useLiveQuery((q) => q.from({ p: packagesCollection }));
+
+  const scannedAtById = new Map((scans ?? []).map((s) => [s.id, s.scannedAt]));
+  const discoveredByPackage = new Map<string, string>();
+  for (const sp of scanPackages ?? []) {
+    const scannedAt = scannedAtById.get(sp.scanId);
+    if (!scannedAt) continue;
+    const prev = discoveredByPackage.get(sp.packageId);
+    if (!prev || scannedAt < prev) discoveredByPackage.set(sp.packageId, scannedAt);
+  }
+  const packageById = new Map((packages ?? []).map((p) => [p.id, p]));
+  const sorted = [...discoveredByPackage.entries()].sort((a, b) => b[1].localeCompare(a[1]));
+  const visible = sorted.slice(0, limit);
+  const remaining = sorted.length - visible.length;
+
+  if (sorted.length === 0) {
+    return (
+      <Card className="w-full">
+        <CardContent>
+          <Text className="text-muted-foreground text-sm">
+            Nothing discovered yet. New packages from tracked authors will show up here.
+          </Text>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <View className="gap-2">
+      {visible.map(([packageId, discoveredAt]) => {
+        const pkg = packageById.get(packageId);
+        return (
+          <Card key={packageId} className="w-full">
+            <CardContent className="flex-row items-center justify-between">
+              <View className="flex-1 gap-0.5">
+                <Text className="font-medium">{packageId}</Text>
+                <Text className="text-muted-foreground text-xs">
+                  {pkg?.publisherId ?? 'unknown author'}
+                </Text>
+              </View>
+              <View className="items-end gap-0.5">
+                {pkg && <Text className="text-sm">{pkg.version}</Text>}
+                <Text className="text-muted-foreground text-xs">{discoveredAt.slice(0, 10)}</Text>
+              </View>
+            </CardContent>
+          </Card>
+        );
+      })}
+      {remaining > 0 && (
+        <Button testID="show-more-added" variant="outline" onPress={() => setLimit((l) => l + PAGE_GROWTH)}>
+          <Text>Show more ({remaining} left)</Text>
+        </Button>
+      )}
+    </View>
+  );
+}
+
 export default function Index() {
   const [username, setUsername] = useState("");
+  const [checking, setChecking] = useState(false);
   const { data: users } = useLiveQuery((q) =>
     q.from({ users: npmUsersCollection }).select(({ users }) => ({
       id: users.id,
@@ -67,18 +343,30 @@ export default function Index() {
     setUsername("");
   };
 
+  const checkNow = () => {
+    if (checking) return;
+    setChecking(true);
+    void scanAllEnabled().finally(() => setChecking(false));
+  };
+
   const usersById = new Map((users ?? []).map((u) => [u.id, u.username]));
   const usernameOf = (job: Job) => usersById.get(job.npmUserId) ?? 'user';
+  // Autocomplete over the bundled popular-maintainers list. Already-tracked
+  // names are excluded; suggestions never write to the DB themselves.
+  const trackedNames = useMemo(
+    () => new Set((users ?? []).map((u) => u.username.toLowerCase())),
+    [users],
+  );
+  const suggestions = useMemo(() => suggestUsernames(username, trackedNames), [username, trackedNames]);
+  // Newest scan wins per user so each card shows its latest outcome.
+  const jobsNewestFirst = (jobs ?? [])
+    .slice()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const latestJobByUser = new Map<string, Job>();
-  for (const job of jobs ?? []) {
+  for (const job of jobsNewestFirst) {
     if (!latestJobByUser.has(job.npmUserId)) latestJobByUser.set(job.npmUserId, job);
   }
-  const activeJobs = (jobs ?? [])
-    .slice()
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .filter((job) =>
-      job.status !== 'success',
-    );
+  const activeJobs = jobsNewestFirst.filter((job) => job.status !== 'success');
 
   const retryJob = (job: Job) => {
     jobsCollection.update(job.id, (draft) => {
@@ -129,66 +417,118 @@ export default function Index() {
       <Stack.Screen options={{ title: 'npm user tracker', headerRight: () => <ThemeToggleButton /> }} />
       <SafeAreaProvider>
         <SafeAreaView className="bg-background flex-1">
-          <View className="gap-2 p-4">
-            <ThemeToggle />
-          </View>
-          <View className="gap-2 px-4">
-            {activeJobs.map((job) => (
-            <View key={job.id} className="gap-2">
-              <View className={`rounded-md px-3 py-2 ${jobStyle(job.status)}`}>
-                <Text>{jobLabel(job, usernameOf(job))}</Text>
-              </View>
-              {job.status === 'failed' && (
-                <Button testID="retry-scan" variant="outline" onPress={() => retryJob(job)}>
-                  <Text>Retry scan</Text>
-                </Button>
-              )}
-              {job.status === 'no-data' && (
-                <Button testID="delete-user-button" variant="destructive" onPress={() => promptDeleteUser(job)}>
-                  <Text>This user may not exist — delete?</Text>
-                </Button>
+          <ScrollView
+            className="flex-1"
+            contentContainerClassName="gap-4 p-4 pb-8"
+            showsVerticalScrollIndicator={false}
+          >
+            <NotificationSetup />
+
+            <View className="gap-2">
+              <Text className="text-lg font-semibold">Needs attention</Text>
+              {activeJobs.length === 0 ? (
+                <Text className="text-muted-foreground text-sm">All clear — every scan succeeded.</Text>
+              ) : (
+                activeJobs.map((job) => (
+                  <View key={job.id} className="gap-2">
+                    <View className={`rounded-md px-3 py-2 ${jobStyle(job.status)}`}>
+                      <Text>{jobLabel(job, usernameOf(job))}</Text>
+                    </View>
+                    {job.status === 'failed' && (
+                      <Button testID="retry-scan" variant="outline" onPress={() => retryJob(job)}>
+                        <Text>Retry scan</Text>
+                      </Button>
+                    )}
+                    {job.status === 'no-data' && (
+                      <Button testID="delete-user-button" variant="destructive" onPress={() => promptDeleteUser(job)}>
+                        <Text>This user may not exist — delete?</Text>
+                      </Button>
+                    )}
+                  </View>
+                ))
               )}
             </View>
-          ))}
-        </View>
-        <Input testID="username-input" onChangeText={setUsername} value={username} placeholder='username' />
-        <Button testID="add-user" onPress={addUser} className="my-2">
-          <Text>Add user</Text>
-        </Button>
-        <ScrollView
-          className="flex-1"
-          contentContainerClassName="gap-4 p-4 pb-8"
-          showsVerticalScrollIndicator={false}
-        >
-          {(users ?? []).map(({ id, username, enable }) => {
-            const latest = latestJobByUser.get(id);
-            return (
-              <Card key={id} className='w-full'>
-                <CardContent className='flex-row justify-between'>
-                  <Text>{`username : ${username}`}</Text>
-                  <View className="items-end gap-1">
-                    {latest && <Text className="text-muted-foreground text-xs">{jobLabel(latest, username)}</Text>}
-                    <Switch
-                      checked={enable}
-                      onCheckedChange={(e) =>
-                        void npmUsersCollection.update(id, (draft) => {
-                          draft.enable = e;
-                        })
-                      }
-                    />
-                  </View>
-                </CardContent>
-              </Card>
-            );
-          })}
-<Link asChild href={'/db'}>
-            <Button testID="db-link" variant="link">
-              <Text>go to db page</Text>
-            </Button>
-          </Link>
-        </ScrollView>
-      </SafeAreaView>
-    </SafeAreaProvider>
+
+            <View className="gap-2">
+              <Text className="text-lg font-semibold">Track an author</Text>
+              <Input testID="username-input" onChangeText={setUsername} value={username} placeholder='npm username' />
+              {suggestions.length > 0 && (
+                <View testID="username-suggestions" className="gap-1">
+                  {suggestions.map((name) => (
+                    <Pressable
+                      key={name}
+                      testID={`username-suggestion-${name}`}
+                      accessibilityRole="button"
+                      onPress={() => setUsername(name)}
+                      className="border-border bg-card rounded-md border px-3 py-2"
+                    >
+                      <Text>{name}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+              <View className="flex-row gap-2">
+                <View className="flex-1">
+                  <Button testID="add-user" onPress={addUser} className="w-full">
+                    <Text>Add user</Text>
+                  </Button>
+                </View>
+                <View className="flex-1">
+                  <Button testID="check-now" variant="outline" onPress={checkNow} disabled={checking} className="w-full">
+                    <Text>{checking ? 'Checking…' : 'Check now'}</Text>
+                  </Button>
+                </View>
+              </View>
+            </View>
+
+            <ScanSchedule />
+
+            <View className="gap-2">
+              <Text className="text-lg font-semibold">Tracked authors</Text>
+              {(users ?? []).length === 0 && (
+                <Text className="text-muted-foreground text-sm">Nobody tracked yet.</Text>
+              )}
+              {(users ?? []).map(({ id, username, enable }) => {
+                const latest = latestJobByUser.get(id);
+                return (
+                  <Card key={id} className='w-full'>
+                    <CardContent className='flex-row justify-between'>
+                      <Text>{`username : ${username}`}</Text>
+                      <View className="items-end gap-1">
+                        {latest && <Text className="text-muted-foreground text-xs">{jobLabel(latest, username)}</Text>}
+                        <Switch
+                          checked={enable}
+                          onCheckedChange={(e) =>
+                            void npmUsersCollection.update(id, (draft) => {
+                              draft.enable = e;
+                            })
+                          }
+                        />
+                      </View>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </View>
+
+            <View className="gap-2">
+              <Text className="text-lg font-semibold">Recent updates</Text>
+              <RecentUpdates />
+            </View>
+
+            <View className="gap-2">
+              <Text className="text-lg font-semibold">Recently added</Text>
+              <RecentlyAdded />
+            </View>
+
+            <Link asChild href={'/db'}>
+              <Button testID="db-link" variant="link">
+                <Text>go to db page</Text>
+              </Button>
+            </Link>
+          </ScrollView>
+        </SafeAreaView>
+      </SafeAreaProvider>
     </>
   );
 }

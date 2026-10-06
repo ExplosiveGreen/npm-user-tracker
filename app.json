@@ -2,7 +2,7 @@
   "expo": {
     "name": "npm user tracker",
     "slug": "npm-user-tracker",
-    "version": "1.0.0",
+    "version": "1.0.0-alpha.4",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "scheme": "mynpm",
@@ -19,7 +19,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.npmusertracker"
+      "package": "com.anonymous.npmusertracker",
+      "versionCode": 4
     },
     "web": {
       "output": "static",
@@ -37,7 +38,10 @@
         }
       ],
       "expo-image",
-      "expo-background-task"
+      "expo-background-task",
+      "expo-notifications",
+      "expo-font",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
