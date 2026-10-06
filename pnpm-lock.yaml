@@ -32,6 +32,9 @@ importers:
       '@tanstack/react-db':
         specifier: ^0.1.95
         version: 0.1.95(react@19.2.3)(typescript@6.0.3)
+      babel-preset-expo:
+        specifier: ~57.0.13
+        version: 57.0.13(@babel/core@7.29.7)(@babel/runtime@7.29.7)(expo@57.0.26)(react-refresh@0.14.2)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1

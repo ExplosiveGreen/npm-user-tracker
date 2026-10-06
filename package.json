@@ -11,6 +11,7 @@
     "@tanstack/db": "^0.6.17",
     "@tanstack/expo-db-sqlite-persistence": "^0.2.9",
     "@tanstack/react-db": "^0.1.95",
+    "babel-preset-expo": "~57.0.13",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "expo": "~57.0.26",
