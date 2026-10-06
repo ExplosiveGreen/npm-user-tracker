@@ -3,6 +3,7 @@
   "main": "expo-router/entry",
   "version": "1.1.0",
   "dependencies": {
+    "@babel/plugin-transform-react-jsx": "^8.0.1",
     "@expo/ui": "~57.0.21",
     "@rn-primitives/label": "^1.5.2",
     "@rn-primitives/portal": "^1.5.2",
