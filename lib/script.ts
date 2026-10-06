@@ -38,6 +38,25 @@ const retryPolicy = Schedule.recurs(2).pipe(
   Schedule.addDelay(() => Effect.succeed("2 seconds" as const)),
 );
 
+// Yields to the JS event loop so touches, scrolls, and Switch toggles are
+// processed between scan batches. (Effect.yieldNow only yields to the Effect
+// runtime — only a real macrotask lets the UI thread breathe.) Awaiting one
+// of these every few packages keeps the app responsive while a big scan
+// (e.g. a prolific author like tannerlinsley) churns through hundreds of
+// network + SQLite writes.
+const yieldToUI = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+// Fast-phase writes are pure search-result upserts (no version-history
+// fetches), so a small concurrency is plenty; version history syncs each pull
+// a full metadata document (often 100KB+) and JSON.parse blocks the thread,
+// so they run at lower concurrency in the background after the job succeeds.
+const PACKAGE_WRITE_CONCURRENCY = 3;
+const VERSION_SYNC_CONCURRENCY = 2;
+// SQLite-backed collection writes each notify live-query subscribers, so a
+// package with hundreds of versions would re-render lists hundreds of times
+// in a tight loop — yield periodically to let input/scroll events through.
+const VERSION_INSERT_YIELD_EVERY = 50;
+
 // npm_users can hold the same username under different ids when a discovered
 // co-maintainer is later added explicitly, so look users up by username and
 // reuse their existing id when available.
@@ -203,7 +222,10 @@ const toTimeRecord = (json: unknown): Record<string, string> => {
 // `created` and `modified` are registry bookkeeping timestamps, not versions,
 // so they are skipped. Only the `time` map is decoded — the full metadata
 // document can be megabytes. Versions are upserted so overlapping
-// author/maintainer scans and re-scans only fill in missing rows.
+// author/maintainer scans and re-scans only fill in missing rows. Inserts are
+// chunked with yields: each write notifies live-query subscribers (which
+// re-sort lists), so a package with hundreds of versions must not write them
+// in one tight loop or the UI freezes until it finishes.
 const syncPackageVersions = (packageId: string): Effect.Effect<void, ScanError> =>
   Effect.gen(function* () {
     const operation = `fetching versions for "${packageId}"`;
@@ -216,14 +238,42 @@ const syncPackageVersions = (packageId: string): Effect.Effect<void, ScanError> 
         (issue) => new ScanError({ operation, message: `invalid version history: ${String(issue)}` }),
       ),
     );
-    yield* Effect.promise(() => packageVersionsCollection.preload());
-    yield* Effect.sync(() => {
-      for (const [version, date] of Object.entries(time)) {
-        if (version === "created" || version === "modified") continue;
-        upsert(packageVersionsCollection, `${packageId}/${version}`, { packageId, version, date });
-      }
-    });
+    const entries = Object.entries(time).filter(([version]) => version !== "created" && version !== "modified");
+    for (let i = 0; i < entries.length; i += VERSION_INSERT_YIELD_EVERY) {
+      const chunk = entries.slice(i, i + VERSION_INSERT_YIELD_EVERY);
+      yield* Effect.sync(() => {
+        for (const [version, date] of chunk) {
+          upsert(packageVersionsCollection, `${packageId}/${version}`, { packageId, version, date });
+        }
+      });
+      yield* Effect.promise(() => yieldToUI());
+    }
   });
+
+// Deferred version-history backfill. The job is already marked success before
+// this runs: search results alone determine releases/notifications, while the
+// full per-version history streams in afterwards at low concurrency. If the OS
+// kills a background task mid-backfill, the next scan upserts the missing rows.
+const backfillVersionHistories = (packageIds: ReadonlyArray<string>): void => {
+  const unique = [...new Set(packageIds)];
+  if (unique.length === 0) return;
+  void Effect.runPromise(
+    Effect.gen(function* () {
+      yield* Effect.promise(() => packageVersionsCollection.preload());
+      // Preload once up front instead of once per package.
+      yield* Effect.forEach(unique, (packageId) =>
+        syncPackageVersions(packageId).pipe(
+          Effect.matchEffect({
+            onFailure: (error) =>
+              Effect.sync(() => {
+                console.warn(`Version history sync skipped for "${packageId}"`, error.message);
+              }),
+            onSuccess: () => Effect.void,
+          }),
+        ), { concurrency: VERSION_SYNC_CONCURRENCY });
+    }),
+  );
+};
 
 // Upserts the `insecure` flag used by the package-flags join.
 const ensureInsecureFlag = (): string => {
@@ -231,35 +281,25 @@ const ensureInsecureFlag = (): string => {
   return "insecure";
 };
 
-// Persists one search object plus its related rows. The version-history sync
-// is best-effort — one missing package must not fail the whole user scan —
-// so its failure is logged and the release is still reported from the search
-// result's version.
+// Persists one search object plus its related rows from the search result
+// only — deliberately no version-history fetch here. History is backfilled
+// after the job succeeds (see backfillVersionHistories), so adding a prolific
+// author marks Done quickly instead of blocking on hundreds of metadata
+// documents while the UI can't respond.
 const processSearchObject = (
   scanId: string,
   object: ObjectsEntity,
   byUsername: Map<string, string>,
-): Effect.Effect<Release | null, ScanError> =>
+): Effect.Effect<{ release: Release | null; historyPending: string | null }, ScanError> =>
   Effect.gen(function* () {
     const { id: packageId, versionChanged, isNewPackage } = yield* Effect.sync(() =>
       upsertPackage(object),
     );
 
-    let release: Release | null = null;
-    if (versionChanged) {
-      yield* syncPackageVersions(packageId).pipe(
-        Effect.matchEffect({
-          // The job still records the new version from the search result
-          // even when the full history fetch fails.
-          onFailure: (error) =>
-            Effect.sync(() => {
-              console.warn(`Version history sync skipped for "${packageId}"`, error.message);
-            }),
-          onSuccess: () => Effect.void,
-        }),
-      );
-      release = { packageId, version: object.package.version, isNewPackage };
-    }
+    const release: Release | null = versionChanged
+      ? { packageId, version: object.package.version, isNewPackage }
+      : null;
+    const historyPending = versionChanged ? packageId : null;
 
     yield* Effect.sync(() => {
       const scanPackageId = safeRandomUUID();
@@ -304,18 +344,20 @@ const processSearchObject = (
       );
     }
 
-    return release;
+    return { release, historyPending };
   });
 
 // Writes one scan (author or maintainer) plus all of its related rows into the
-// schema tables. Returns the releases worth notifying about: new packages and
-// version bumps seen in this scan. Objects are processed with bounded
-// concurrency — each object's writes are synchronous and atomic, so fibers
-// only interleave on network I/O.
+// schema tables. Returns the releases worth notifying about plus the package
+// ids whose version history still needs backfilling. Objects are processed in
+// small batches with a yield between batches: every write notifies live-query
+// subscribers, and without yielding a 100+ package scan starves touches and
+// scrolls until it finishes.
 const persistScan = (
   npmUserId: string,
   scan: scanResult,
-): Effect.Effect<Array<Release>, ScanError> =>
+  byUsername: Map<string, string>,
+): Effect.Effect<{ releases: Array<Release>; historyPending: Array<string> }, ScanError> =>
   Effect.gen(function* () {
     const scanId = safeRandomUUID();
     yield* Effect.sync(() =>
@@ -328,15 +370,21 @@ const persistScan = (
       }),
     );
 
-    yield* Effect.promise(() => packagesCollection.preload());
-    yield* Effect.promise(() => packageMaintainersCollection.preload());
-    yield* Effect.promise(() => packageKeywordsCollection.preload());
-    const byUsername = yield* Effect.promise(() => loadUsersByUsername());
-
-    const results = yield* Effect.forEach(scan.objects, (object) => processSearchObject(scanId, object, byUsername), {
-      concurrency: 5,
-    });
-    return results.filter((release): release is Release => release !== null);
+    const releases: Array<Release> = [];
+    const historyPending: Array<string> = [];
+    for (let i = 0; i < scan.objects.length; i += PACKAGE_WRITE_CONCURRENCY) {
+      const batch = scan.objects.slice(i, i + PACKAGE_WRITE_CONCURRENCY);
+      const results = yield* Effect.forEach(batch, (object) => processSearchObject(scanId, object, byUsername), {
+        concurrency: PACKAGE_WRITE_CONCURRENCY,
+      });
+      for (const { release, historyPending: pending } of results) {
+        if (release) releases.push(release);
+        if (pending) historyPending.push(pending);
+      }
+      // Let taps, scrolls, and Switch toggles process before the next batch.
+      yield* Effect.promise(() => yieldToUI());
+    }
+    return { releases, historyPending };
   });
 
 const setJob = (
@@ -380,8 +428,25 @@ const runScan = (job: Job): Effect.Effect<void, ScanError> =>
       return;
     }
 
-    const authorReleases = yield* persistScan(job.npmUserId, author);
-    const maintainerReleases = yield* persistScan(job.npmUserId, maintainer);
+    // Preload once per job instead of once per scan — persistScan used to do
+    // this twice (author + maintainer) back to back.
+    yield* Effect.promise(() => packagesCollection.preload());
+    yield* Effect.promise(() => packageMaintainersCollection.preload());
+    yield* Effect.promise(() => packageKeywordsCollection.preload());
+    const byUsername = yield* Effect.promise(() => loadUsersByUsername());
+
+    const { releases: authorReleases, historyPending: authorPending } = yield* persistScan(
+      job.npmUserId,
+      author,
+      byUsername,
+    );
+    // Yield between the two scans so a big author result can't starve input.
+    yield* Effect.promise(() => yieldToUI());
+    const { releases: maintainerReleases, historyPending: maintainerPending } = yield* persistScan(
+      job.npmUserId,
+      maintainer,
+      byUsername,
+    );
     // The same package can appear in both scans; keep the first sighting so
     // the notification counts it once.
     const seen = new Set<string>();
@@ -407,6 +472,12 @@ const runScan = (job: Job): Effect.Effect<void, ScanError> =>
         }),
       );
     }
+
+    // Backfill full version histories after the job is Done. This is the slow
+    // part (one full metadata document per new/changed package) and it runs
+    // detached at low concurrency with yields, so "Recent updates" fills in
+    // gradually while the UI stays interactive.
+    yield* Effect.sync(() => backfillVersionHistories([...authorPending, ...maintainerPending]));
   });
 
 // Runs one tracked job to completion, driving its status as it goes: queued ->

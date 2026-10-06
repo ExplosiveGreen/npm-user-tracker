@@ -30,7 +30,7 @@ import {
   SCAN_INTERVAL_UNITS,
   type ScanIntervalUnit,
 } from '@/lib/tasks';
-import { useEffect, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Link, Stack } from 'expo-router';
@@ -194,14 +194,26 @@ function RecentUpdates() {
   const { data: versions } = useLiveQuery((q) => q.from({ v: packageVersionsCollection }));
   const { data: packages } = useLiveQuery((q) => q.from({ p: packagesCollection }));
 
-  const publisherByPackage = new Map((packages ?? []).map((p) => [p.id, p.publisherId]));
-  const sorted = (versions ?? [])
-    .slice()
-    .sort((a, b) => b.date.localeCompare(a.date));
-  const visible = sorted.slice(0, limit);
-  const remaining = sorted.length - visible.length;
+  // During a scan hundreds of version rows stream in, one live-query update
+  // per write. Deferring lets typing/scroll win while the list catches up, and
+  // memoizing keeps the sort to one run per data change instead of per render.
+  const deferredVersions = useDeferredValue(versions);
+  const deferredPackages = useDeferredValue(packages);
+  const { visible, remaining } = useMemo(() => {
+    const publisherByPackage = new Map((deferredPackages ?? []).map((p) => [p.id, p.publisherId]));
+    const sorted = (deferredVersions ?? [])
+      .slice()
+      .sort((a, b) => b.date.localeCompare(a.date));
+    return {
+      visible: sorted.slice(0, limit).map((v) => ({
+        v,
+        publisher: publisherByPackage.get(v.packageId) ?? 'unknown author',
+      })),
+      remaining: sorted.length - Math.min(sorted.length, limit),
+    };
+  }, [deferredVersions, deferredPackages, limit]);
 
-  if (sorted.length === 0) {
+  if (visible.length === 0 && remaining === 0) {
     return (
       <Card className="w-full">
         <CardContent>
@@ -215,13 +227,13 @@ function RecentUpdates() {
 
   return (
     <View className="gap-2">
-      {visible.map((v) => (
+      {visible.map(({ v, publisher }) => (
         <Card key={`${v.packageId}/${v.version}`} className="w-full">
           <CardContent className="flex-row items-center justify-between">
             <View className="flex-1 gap-0.5">
               <Text className="font-medium">{v.packageId}</Text>
               <Text className="text-muted-foreground text-xs">
-                {publisherByPackage.get(v.packageId) ?? 'unknown author'}
+                {publisher}
               </Text>
             </View>
             <View className="items-end gap-0.5">
@@ -249,20 +261,33 @@ function RecentlyAdded() {
   const { data: scanPackages } = useLiveQuery((q) => q.from({ sp: scanPackagesCollection }));
   const { data: packages } = useLiveQuery((q) => q.from({ p: packagesCollection }));
 
-  const scannedAtById = new Map((scans ?? []).map((s) => [s.id, s.scannedAt]));
-  const discoveredByPackage = new Map<string, string>();
-  for (const sp of scanPackages ?? []) {
-    const scannedAt = scannedAtById.get(sp.scanId);
-    if (!scannedAt) continue;
-    const prev = discoveredByPackage.get(sp.packageId);
-    if (!prev || scannedAt < prev) discoveredByPackage.set(sp.packageId, scannedAt);
-  }
-  const packageById = new Map((packages ?? []).map((p) => [p.id, p]));
-  const sorted = [...discoveredByPackage.entries()].sort((a, b) => b[1].localeCompare(a[1]));
-  const visible = sorted.slice(0, limit);
-  const remaining = sorted.length - visible.length;
+  const deferredScans = useDeferredValue(scans);
+  const deferredScanPackages = useDeferredValue(scanPackages);
+  const deferredAddedPackages = useDeferredValue(packages);
+  const { visible, remaining } = useMemo(() => {
+    const scannedAtById = new Map((deferredScans ?? []).map((s) => [s.id, s.scannedAt]));
+    const discoveredByPackage = new Map<string, string>();
+    for (const sp of deferredScanPackages ?? []) {
+      const scannedAt = scannedAtById.get(sp.scanId);
+      if (!scannedAt) continue;
+      const prev = discoveredByPackage.get(sp.packageId);
+      if (!prev || scannedAt < prev) discoveredByPackage.set(sp.packageId, scannedAt);
+    }
+    const sorted = [...discoveredByPackage.entries()].sort((a, b) => b[1].localeCompare(a[1]));
+    const sliced = sorted.slice(0, limit);
+    const packageById = new Map((deferredAddedPackages ?? []).map((p) => [p.id, p]));
+    return {
+      visible: sliced.map(([packageId, discoveredAt]) => ({
+        packageId,
+        discoveredAt,
+        publisher: packageById.get(packageId)?.publisherId ?? 'unknown author',
+        version: packageById.get(packageId)?.version ?? null,
+      })),
+      remaining: sorted.length - sliced.length,
+    };
+  }, [deferredScans, deferredScanPackages, deferredAddedPackages, limit]);
 
-  if (sorted.length === 0) {
+  if (visible.length === 0 && remaining === 0) {
     return (
       <Card className="w-full">
         <CardContent>
@@ -276,19 +301,18 @@ function RecentlyAdded() {
 
   return (
     <View className="gap-2">
-      {visible.map(([packageId, discoveredAt]) => {
-        const pkg = packageById.get(packageId);
+      {visible.map(({ packageId, discoveredAt, publisher, version }) => {
         return (
           <Card key={packageId} className="w-full">
             <CardContent className="flex-row items-center justify-between">
               <View className="flex-1 gap-0.5">
                 <Text className="font-medium">{packageId}</Text>
                 <Text className="text-muted-foreground text-xs">
-                  {pkg?.publisherId ?? 'unknown author'}
+                  {publisher}
                 </Text>
               </View>
               <View className="items-end gap-0.5">
-                {pkg && <Text className="text-sm">{pkg.version}</Text>}
+                {version && <Text className="text-sm">{version}</Text>}
                 <Text className="text-muted-foreground text-xs">{discoveredAt.slice(0, 10)}</Text>
               </View>
             </CardContent>
@@ -349,8 +373,24 @@ export default function Index() {
     void scanAllEnabled().finally(() => setChecking(false));
   };
 
-  const usersById = new Map((users ?? []).map((u) => [u.id, u.username]));
-  const usernameOf = (job: Job) => usersById.get(job.npmUserId) ?? 'user';
+  // Derived job/user lookups, memoized: jobs update on every status flip
+  // during a scan, and re-sorting + rebuilding maps per render would pile
+  // onto the same frame budget the scan writes already consume.
+  const { usernameOf, latestJobByUser, activeJobs } = useMemo(() => {
+    const usersById = new Map((users ?? []).map((u) => [u.id, u.username]));
+    const newestFirst = (jobs ?? [])
+      .slice()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const latest = new Map<string, Job>();
+    for (const job of newestFirst) {
+      if (!latest.has(job.npmUserId)) latest.set(job.npmUserId, job);
+    }
+    return {
+      usernameOf: (job: Job) => usersById.get(job.npmUserId) ?? 'user',
+      latestJobByUser: latest,
+      activeJobs: newestFirst.filter((job) => job.status !== 'success'),
+    };
+  }, [users, jobs]);
   // Autocomplete over the bundled popular-maintainers list. Already-tracked
   // names are excluded; suggestions never write to the DB themselves.
   const trackedNames = useMemo(
@@ -358,15 +398,6 @@ export default function Index() {
     [users],
   );
   const suggestions = useMemo(() => suggestUsernames(username, trackedNames), [username, trackedNames]);
-  // Newest scan wins per user so each card shows its latest outcome.
-  const jobsNewestFirst = (jobs ?? [])
-    .slice()
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const latestJobByUser = new Map<string, Job>();
-  for (const job of jobsNewestFirst) {
-    if (!latestJobByUser.has(job.npmUserId)) latestJobByUser.set(job.npmUserId, job);
-  }
-  const activeJobs = jobsNewestFirst.filter((job) => job.status !== 'success');
 
   const retryJob = (job: Job) => {
     jobsCollection.update(job.id, (draft) => {
