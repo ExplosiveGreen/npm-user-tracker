@@ -366,11 +366,18 @@ const drainPendingHistories = async (budgetMs: number): Promise<void> => {
 // step is idempotent and durable, so an OS kill mid-run just means the next
 // run continues — closing the app never loses a scan.
 export const runBackgroundScan = async (): Promise<void> => {
-  await recoverInterruptedScans();
-  await scanAllEnabled();
-  // ~8 minutes: fits inside Android's ~10-minute JobScheduler window; on iOS
-  // the OS kills earlier anyway and the remainder resumes next run.
-  await drainPendingHistories(8 * 60_000);
+  console.log("[scan] background run started");
+  try {
+    await recoverInterruptedScans();
+    await scanAllEnabled();
+    // ~8 minutes: fits inside Android's ~10-minute JobScheduler window; on iOS
+    // the OS kills earlier anyway and the remainder resumes next run.
+    await drainPendingHistories(8 * 60_000);
+    console.log("[scan] background run finished");
+  } catch (error) {
+    console.warn("[scan] background run failed", error);
+    throw error;
+  }
 };
 
 // Upserts the `insecure` flag used by the package-flags join.
@@ -597,6 +604,7 @@ export const processJob = (jobId: string): Promise<void> => {
         onFailure: (error) =>
           Effect.sync(() => {
             const attempts = (jobsCollection.get(jobId)?.attempts ?? 0) + 1;
+            console.warn(`[scan] job ${jobId} failed (attempt ${attempts})`, error.message);
             setJob(jobId, {
               status: "failed",
               error: error.message,
