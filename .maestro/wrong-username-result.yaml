@@ -26,5 +26,6 @@ name: wrong-username-deletes-user-result
 - assertVisible: "This user might not exist"
 - tapOn: "Delete user"
 - scrollUntilVisible:
-    visible: "Nobody tracked yet."
+    element:
+      text: "Nobody tracked yet."
 - assertNotVisible: "~t3dotgg"
