@@ -8,6 +8,7 @@ import { Platform } from 'react-native';
 import '@/lib/tasks';
 import { ThemeProvider, useTheme } from '@/lib/theme-provider';
 import { THEME } from '@/lib/theme';
+import { recoverInterruptedScans } from '@/lib/script';
 import { registerScanTask } from '@/lib/tasks';
 
 function ThemedRoot() {
@@ -35,6 +36,11 @@ export default function RootLayout() {
     // tracking continues even when the app is closed.
     registerScanTask().catch((error) => {
       console.warn('Background task registration skipped', error);
+    });
+    // Resumes scans killed with the app: partial progress is already durable,
+    // so interrupted jobs just re-run to completion and failed ones retry.
+    recoverInterruptedScans().catch((error) => {
+      console.warn('Interrupted scan recovery skipped', error);
     });
   }, []);
 

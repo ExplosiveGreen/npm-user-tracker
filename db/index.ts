@@ -96,7 +96,9 @@ export type JobStatus = 'queued' | 'running' | 'success' | 'failed' | 'no-data';
 
 // Tracks the work of every background scan run against an npm user. The app
 // observes this collection to render live per-job status (running/failed/etc.)
-// and to drive retry / delete-user feedback actions.
+// and to drive retry / delete-user feedback actions. `attempts` counts how
+// many times the job has failed (interrupted or errored): jobs with budget
+// left retry after a short delay, the rest wait for the next scheduled scan.
 export type Job = {
   id: string;
   npmUserId: string;
@@ -104,6 +106,7 @@ export type Job = {
   error: string | null;
   authorTotal: number;
   maintainerTotal: number;
+  attempts: number;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -264,7 +267,7 @@ export const dbTables: DbTable[] = [
     name: 'jobs',
     columns: [
       'id', 'npmUserId', 'status', 'error', 'authorTotal', 'maintainerTotal',
-      'createdAt', 'startedAt', 'finishedAt',
+      'attempts', 'createdAt', 'startedAt', 'finishedAt',
     ],
     collection: jobsCollection as unknown as DbTable['collection'],
   },

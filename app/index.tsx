@@ -357,6 +357,7 @@ export default function Index() {
       error: null,
       authorTotal: 0,
       maintainerTotal: 0,
+      attempts: 0,
       createdAt: new Date().toISOString(),
       startedAt: null,
       finishedAt: null,
@@ -407,6 +408,7 @@ export default function Index() {
       draft.finishedAt = null;
       draft.authorTotal = 0;
       draft.maintainerTotal = 0;
+      draft.attempts = 0;
     });
     void processJob(job.id);
   };

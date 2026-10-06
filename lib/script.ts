@@ -2,6 +2,7 @@ import { Data, Effect, Schedule, Schema } from "effect";
 import { safeRandomUUID } from "@tanstack/db";
 import type { ObjectsEntity, scanResult } from "@/types";
 import { notifyReleases } from "@/lib/notifications";
+import { getPref, setPref } from "@/lib/prefs";
 import { PackageTime, SearchResponse } from "@/lib/registry-schema";
 import {
   jobsCollection,
@@ -56,6 +57,34 @@ const VERSION_SYNC_CONCURRENCY = 2;
 // package with hundreds of versions would re-render lists hundreds of times
 // in a tight loop — yield periodically to let input/scroll events through.
 const VERSION_INSERT_YIELD_EVERY = 50;
+
+// Retry budget for one job: this many immediate retries after a short delay,
+// then the job waits for the next scheduled scan ("a later date"). Fresh jobs
+// from "Check now" / the background task always start at 0.
+const MAX_IMMEDIATE_RETRIES = 2;
+const RETRY_DELAY_MS = 30_000;
+
+// Durable backfill queue: package ids whose version history still needs
+// syncing. Saved to prefs before the backfill starts and pruned as packages
+// complete, so killing the app mid-backfill resumes it on next launch
+// instead of dropping it. Failures stay queued — the next launch or scan
+// retries them. Capped so the pref can't grow without bound.
+const PENDING_HISTORIES_KEY = 'pending-version-histories';
+const MAX_PENDING_HISTORIES = 500;
+
+const getPendingHistories = (): Array<string> => {
+  try {
+    const raw = getPref(PENDING_HISTORIES_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
+const setPendingHistories = (ids: ReadonlyArray<string>): void => {
+  setPref(PENDING_HISTORIES_KEY, ids.length === 0 ? null : JSON.stringify(ids));
+};
 
 // npm_users can hold the same username under different ids when a discovered
 // co-maintainer is later added explicitly, so look users up by username and
@@ -254,25 +283,41 @@ const syncPackageVersions = (packageId: string): Effect.Effect<void, ScanError> 
 // this runs: search results alone determine releases/notifications, while the
 // full per-version history streams in afterwards at low concurrency. If the OS
 // kills a background task mid-backfill, the next scan upserts the missing rows.
+// The pending list is durable (prefs): whatever was already applied stays
+// applied (idempotent upserts), and whatever hadn't finished resumes later.
 const backfillVersionHistories = (packageIds: ReadonlyArray<string>): void => {
   const unique = [...new Set(packageIds)];
-  if (unique.length === 0) return;
+  const merged = [...new Set([...getPendingHistories(), ...unique])].slice(-MAX_PENDING_HISTORIES);
+  if (merged.length === 0) return;
+  setPendingHistories(merged);
   void Effect.runPromise(
     Effect.gen(function* () {
       yield* Effect.promise(() => packageVersionsCollection.preload());
       // Preload once up front instead of once per package.
-      yield* Effect.forEach(unique, (packageId) =>
+      yield* Effect.forEach(merged, (packageId) =>
         syncPackageVersions(packageId).pipe(
           Effect.matchEffect({
+            // Stays in the pending list — retried on a later launch/scan.
             onFailure: (error) =>
               Effect.sync(() => {
                 console.warn(`Version history sync skipped for "${packageId}"`, error.message);
               }),
-            onSuccess: () => Effect.void,
+            onSuccess: () =>
+              Effect.sync(() => {
+                // Read-modify-write inside one sync block: no yield inside,
+                // so concurrent fibers can't interleave and lose a removal.
+                setPendingHistories(getPendingHistories().filter((id) => id !== packageId));
+              }),
           }),
         ), { concurrency: VERSION_SYNC_CONCURRENCY });
     }),
   );
+};
+
+// Resumes a backfill queue left behind by a killed app session.
+const resumePendingHistories = (): void => {
+  const pending = getPendingHistories();
+  if (pending.length > 0) backfillVersionHistories(pending);
 };
 
 // Upserts the `insecure` flag used by the package-flags join.
@@ -390,7 +435,7 @@ const persistScan = (
 const setJob = (
   jobId: string,
   patch: Partial<
-    Pick<Job, "status" | "error" | "authorTotal" | "maintainerTotal" | "startedAt" | "finishedAt">
+    Pick<Job, "status" | "error" | "authorTotal" | "maintainerTotal" | "attempts" | "startedAt" | "finishedAt">
   >,
 ): void => {
   jobsCollection.update(jobId, (draft) => Object.assign(draft, patch));
@@ -483,6 +528,11 @@ const runScan = (job: Job): Effect.Effect<void, ScanError> =>
 // Runs one tracked job to completion, driving its status as it goes: queued ->
 // running -> success | no-data | failed. Promise-based at the boundary for the
 // UI and background task callers; Effect inside.
+//
+// A failed job retries after a short delay while it still has budget left;
+// past that it waits for the next scheduled scan. Closing the app mid-scan
+// just leaves the job `running` — the next launch resumes it, and everything
+// already written stays written (every write is an idempotent upsert).
 export const processJob = (jobId: string): Promise<void> => {
   const job = jobsCollection.get(jobId);
   if (!job) return Promise.resolve();
@@ -490,30 +540,110 @@ export const processJob = (jobId: string): Promise<void> => {
 
   const now = new Date().toISOString();
   setJob(jobId, { status: "running", error: null, startedAt: now, finishedAt: null });
+  liveJobIds.add(jobId);
 
   return Effect.runPromise(
     runScan(job).pipe(
       Effect.matchEffect({
         onFailure: (error) =>
-          Effect.sync(() =>
+          Effect.sync(() => {
+            const attempts = (jobsCollection.get(jobId)?.attempts ?? 0) + 1;
             setJob(jobId, {
               status: "failed",
               error: error.message,
+              attempts,
               finishedAt: new Date().toISOString(),
-            }),
-          ),
+            });
+            if (attempts <= MAX_IMMEDIATE_RETRIES) scheduleRetry(jobId);
+          }),
         onSuccess: () => Effect.void,
       }),
     ),
-  );
+  ).finally(() => {
+    liveJobIds.delete(jobId);
+  });
 };
 
+// Jobs actively running in this session. A `running` row NOT in this set is
+// a leftover from a killed session — safe to treat as interrupted.
+const liveJobIds = new Set<string>();
+
+// One-shot delayed retry for a failed job. Guards: never double-schedule, and
+// re-checks the job is still `failed` at fire time (the user may have tapped
+// Retry or deleted it meanwhile). The timer only lives while the app does —
+// a killed app retries via recoverInterruptedScans on next launch instead.
+const scheduledRetries = new Set<string>();
+
+const scheduleRetry = (jobId: string, delayMs: number = RETRY_DELAY_MS): void => {
+  if (scheduledRetries.has(jobId)) return;
+  scheduledRetries.add(jobId);
+  setTimeout(() => {
+    scheduledRetries.delete(jobId);
+    const job = jobsCollection.get(jobId);
+    if (!job || job.status !== "failed") return;
+    void processJob(jobId);
+  }, delayMs);
+};
+
+// Recovers scan work interrupted by a killed app. Runs once at startup:
+// `running` jobs died mid-scan (their partial writes are durable upserts, so
+// re-running completes them), leftover `queued` jobs never started, `failed`
+// jobs that lost their delayed retry get a fresh one, and an interrupted
+// version-history backfill resumes. Anything past the immediate retry budget
+// is left for the next scheduled scan.
+export const recoverInterruptedScans = (): Promise<void> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      yield* Effect.promise(() => jobsCollection.preload());
+      yield* Effect.promise(() => npmUsersCollection.preload());
+
+      const interrupted = jobsCollection.toArray.filter(
+        (job) => job.status === "running" && (job.attempts ?? 0) <= MAX_IMMEDIATE_RETRIES,
+      );
+      for (const job of interrupted) {
+        yield* Effect.sync(() => setJob(job.id, { status: "queued", startedAt: null }));
+      }
+      const queued = jobsCollection.toArray.filter((job) => job.status === "queued");
+      for (const job of queued) {
+        yield* Effect.promise(() => processJob(job.id));
+      }
+
+      const failed = jobsCollection.toArray.filter(
+        (job) => job.status === "failed" && (job.attempts ?? 0) <= MAX_IMMEDIATE_RETRIES,
+      );
+      yield* Effect.sync(() => {
+        for (const job of failed) scheduleRetry(job.id);
+      });
+
+      yield* Effect.sync(() => resumePendingHistories());
+    }),
+  );
+
 // Queues a fresh scan job for every enabled user and runs it. Used by the
-// "Check now" button and shared with the background task path.
+// "Check now" button and shared with the background task path. A fresh sweep
+// is also the "later date" retry: anything still failed or interrupted gets
+// scanned again here once the immediate retry budget is spent.
 export const scanAllEnabled = (): Promise<void> =>
   Effect.runPromise(
     Effect.gen(function* () {
       yield* Effect.promise(() => npmUsersCollection.preload());
+      yield* Effect.promise(() => jobsCollection.preload());
+      // `running` rows from a killed session never complete on their own —
+      // close them out as interrupted so "Needs attention" tells the truth.
+      // Live jobs in this session are excluded via liveJobIds.
+      const stale = jobsCollection.toArray.filter(
+        (job) => job.status === "running" && !liveJobIds.has(job.id),
+      );
+      for (const job of stale) {
+        yield* Effect.sync(() =>
+          setJob(job.id, {
+            status: "failed",
+            error: "Scan interrupted",
+            attempts: (job.attempts ?? 0) + 1,
+            finishedAt: new Date().toISOString(),
+          }),
+        );
+      }
       const enabled = npmUsersCollection.toArray.filter((user) => user.enable);
       yield* Effect.forEach(enabled, (user) =>
         Effect.gen(function* () {
@@ -526,6 +656,7 @@ export const scanAllEnabled = (): Promise<void> =>
               error: null,
               authorTotal: 0,
               maintainerTotal: 0,
+              attempts: 0,
               createdAt: new Date().toISOString(),
               startedAt: null,
               finishedAt: null,
