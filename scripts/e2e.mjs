@@ -120,6 +120,10 @@ async function ensureExpoGo() {
 // field; the settle wait lets the IME/RN bridge catch up.
 function typeText(text) {
   adb('shell', 'input', 'text', text.replace(/ /g, '%s'));
+  sleep(2000);
+  // Commit Gboard's composing buffer: injected keys sit uncommitted (visible
+  // but RN onChange never fires) until Enter commits them with the final text.
+  adb('shell', 'input', 'keyevent', 'KEYCODE_ENTER');
   sleep(3000);
 }
 
