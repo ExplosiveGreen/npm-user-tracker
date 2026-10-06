@@ -2,19 +2,21 @@ appId: host.exp.exponent
 name: online-retry-queues-job
 ---
 # Run after scripts/e2e.mjs has restored the network following the offline-add
-# flow. The app is still on the failed-job screen; tapping retry only requeues
-# now (execution lives in the background task), so assert the queued state.
-# The harness force-runs the background job next, then online-retry-result
-# asserts the populated tables. Taps are fire-and-retry: a tap swallowed by a
-# hydration jank wave must not abort the loop, so the body never hard-fails.
-- repeat:
-    while:
-      notVisible: "Queued: scanning instafluff…"
-    times: 5
+# flow. Tapping retry only requeues (execution lives in the background task).
+# The 30s background retry ladder may already have cleared the failure once
+# the network returned — so only tap when the retry button is still there.
+# Either way the harness force-runs the background job next, then
+# online-retry-result asserts the populated tables.
+- runFlow:
+    when:
+      visible:
+        id: "retry-scan"
     commands:
-      - tapOn:
-          id: "retry-scan"
-          optional: true
-- extendedWaitUntil:
-    visible: "Queued: scanning instafluff…"
-    timeout: 15000
+      - repeat:
+          while:
+            notVisible: "Queued: scanning instafluff…"
+          times: 5
+          commands:
+            - tapOn:
+                id: "retry-scan"
+                optional: true
