@@ -8,6 +8,7 @@ name: online-retry-queues-job
 # Either way the harness force-runs the background job next, then
 # online-retry-result asserts the populated tables.
 - launchApp:
+    clearState: false
 - runFlow:
     when:
       visible:

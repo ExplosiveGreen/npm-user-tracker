@@ -6,6 +6,7 @@ name: wrong-username-deletes-user-result
 # no-data outcome plus the delete-user prompt. (No retry loop: retry only
 # requeues now, so a transient registry error would need another forced run.)
 - launchApp:
+    clearState: false
 - extendedWaitUntil:
     visible:
       id: "delete-user-button"

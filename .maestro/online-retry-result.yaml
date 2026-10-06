@@ -5,6 +5,7 @@ name: online-retry-populates-tables-result
 # requeued retry has now executed. Bring the app forward and verify the
 # success state and that every table received at least one row.
 - launchApp:
+    clearState: false
 # Histories backfill after the job succeeds, so allow time for that.
 - extendedWaitUntil:
     visible: "Done: instafluff.*"

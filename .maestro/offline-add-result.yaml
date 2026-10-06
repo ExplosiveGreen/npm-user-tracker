@@ -4,6 +4,7 @@ name: offline-add-shows-retry-result
 # Runs after the harness force-ran the OS background task while still offline:
 # the fetch must have failed, so the job errors and offers a retry.
 - launchApp:
+    clearState: false
 - extendedWaitUntil:
     visible:
       id: "retry-scan"
