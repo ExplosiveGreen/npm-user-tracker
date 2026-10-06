@@ -112,6 +112,16 @@ async function ensureExpoGo() {
   console.log('Expo Go installed.');
 }
 
+// Maestro's inputText uses setText, which bypasses React Native's onChange —
+// the visible text arrives but component state never updates, so Add/Apply
+// buttons silently no-op. Typing through adb key events goes through the IME,
+// so onChange fires and state syncs. Call only right after a flow focused the
+// field; the settle wait lets the IME/RN bridge catch up.
+function typeText(text) {
+  adb('shell', 'input', 'text', text.replace(/ /g, '%s'));
+  sleep(3000);
+}
+
 // Scans run exclusively in the OS background task, so the flows can only
 // queue work from the UI. This forces the scheduled WorkManager job to run
 // right now via adb (Expo's documented recipe) instead of waiting for the OS
