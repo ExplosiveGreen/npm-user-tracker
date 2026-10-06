@@ -25,7 +25,9 @@ import { processJob, scanAllEnabled } from '@/lib/script';
 import {
   getScanIntervalMinutes,
   setScanIntervalMinutes,
-  SCAN_INTERVAL_OPTIONS,
+  MIN_SCAN_INTERVAL_MINUTES,
+  SCAN_INTERVAL_UNITS,
+  type ScanIntervalUnit,
 } from '@/lib/tasks';
 import { useEffect, useState } from 'react';
 import { Alert, ScrollView, View } from 'react-native';
@@ -89,31 +91,73 @@ function NotificationSetup() {
   );
 }
 
-// Scan schedule control: persists the interval and re-registers the
-// OS-scheduled background task, so rescans happen even when the app is closed.
-// The OS treats the interval as a minimum — Android batches jobs to save
-// battery (15-minute minimum) and iOS runs them on its own windows.
+// Scan schedule control: a number plus a unit (minutes to months), persisted
+// and re-registered with the OS task so rescans happen even when the app is
+// closed. The OS treats the interval as a minimum — Android batches jobs to
+// save battery (15-minute floor) and iOS runs them on its own windows.
 function ScanSchedule() {
-  const [minutes, setMinutes] = useState(getScanIntervalMinutes);
+  const initial = splitMinutes(getScanIntervalMinutes());
+  const [amount, setAmount] = useState(String(initial.amount));
+  const [unit, setUnit] = useState<ScanIntervalUnit>(initial.unit);
+  const [savedMinutes, setSavedMinutes] = useState(getScanIntervalMinutes());
+  const [error, setError] = useState<string | null>(null);
+
+  const apply = () => {
+    const n = Number(amount);
+    if (!Number.isInteger(n) || n < 1) {
+      setError('Enter a whole number of 1 or more.');
+      return;
+    }
+    const factor = SCAN_INTERVAL_UNITS.find((u) => u.unit === unit)!.factor;
+    const total = n * factor;
+    if (total < MIN_SCAN_INTERVAL_MINUTES) {
+      setError(`That is under the ${MIN_SCAN_INTERVAL_MINUTES}-minute minimum the OS allows.`);
+      return;
+    }
+    setError(null);
+    void setScanIntervalMinutes(total).then(
+      () => setSavedMinutes(total),
+      () => setError('Could not reschedule — try again.'),
+    );
+  };
 
   return (
     <View className="gap-2">
       <Text className="text-lg font-semibold">Scan schedule</Text>
-      <View className="flex-row flex-wrap gap-2">
-        {SCAN_INTERVAL_OPTIONS.map((option) => (
-          <Button
-            key={option.minutes}
-            testID={`scan-interval-${option.minutes}`}
-            variant={option.minutes === minutes ? 'default' : 'outline'}
-            size="sm"
-            onPress={() =>
-              void setScanIntervalMinutes(option.minutes).then(() => setMinutes(option.minutes))
-            }
-          >
-            <Text>{option.label}</Text>
-          </Button>
-        ))}
+      <Text className="text-muted-foreground text-sm">
+        Currently: every {describeMinutes(savedMinutes)}.
+      </Text>
+      <View className="flex-row gap-2">
+        <View className="w-24">
+          <Input
+            testID="scan-interval-number"
+            value={amount}
+            onChangeText={(v) => {
+              setAmount(v.replace(/[^0-9]/g, ''));
+              setError(null);
+            }}
+            keyboardType="number-pad"
+            placeholder="1"
+          />
+        </View>
+        <View className="flex-1 flex-row flex-wrap gap-2">
+          {SCAN_INTERVAL_UNITS.map((option) => (
+            <Button
+              key={option.unit}
+              testID={`scan-unit-${option.unit}`}
+              variant={option.unit === unit ? 'default' : 'outline'}
+              size="sm"
+              onPress={() => setUnit(option.unit)}
+            >
+              <Text>{option.label}</Text>
+            </Button>
+          ))}
+        </View>
       </View>
+      {error ? <Text className="text-destructive text-xs">{error}</Text> : null}
+      <Button testID="scan-interval-apply" variant="outline" onPress={apply}>
+        <Text>Apply schedule</Text>
+      </Button>
       <Text className="text-muted-foreground text-xs">
         Enabled authors are rescanned automatically, even with the app closed.
         The exact timing is up to the OS. The switch on each author is the
@@ -121,6 +165,24 @@ function ScanSchedule() {
       </Text>
     </View>
   );
+}
+
+// Expresses stored minutes in the largest whole unit (a month counts 30 days).
+// Anything that does not divide evenly falls back to plain minutes.
+function splitMinutes(minutes: number): { amount: number; unit: ScanIntervalUnit } {
+  for (const option of [...SCAN_INTERVAL_UNITS].reverse()) {
+    if (minutes % option.factor === 0) {
+      return { amount: minutes / option.factor, unit: option.unit };
+    }
+  }
+  return { amount: minutes, unit: 'minutes' };
+}
+
+// Short human label for the saved interval ("90 minutes", "6 hours", ...).
+function describeMinutes(minutes: number): string {
+  const { amount, unit } = splitMinutes(minutes);
+  const label = SCAN_INTERVAL_UNITS.find((u) => u.unit === unit)!.label.toLowerCase();
+  return `${amount} ${amount === 1 ? label.replace(/s$/, '') : label}`;
 }
 
 // Release history: the newest package versions across all tracked packages.
