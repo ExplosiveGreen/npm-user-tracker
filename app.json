@@ -2,7 +2,7 @@
   "expo": {
     "name": "npm user tracker",
     "slug": "npm-user-tracker",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "scheme": "mynpm",
@@ -37,7 +37,10 @@
         }
       ],
       "expo-image",
-      "expo-background-task"
+      "expo-background-task",
+      "expo-notifications",
+      "expo-font",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
