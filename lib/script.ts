@@ -1,5 +1,6 @@
 import { safeRandomUUID } from '@tanstack/db';
 import type { ObjectsEntity, PackageInfo, scanResult } from '@/types';
+import { notifyReleases } from '@/lib/notifications';
 import {
   jobsCollection,
   npmUsersCollection,
@@ -78,13 +79,15 @@ const upsert = <T extends object>(
 };
 
 // Packages are keyed by their unique npm name, so re-scanning a user upserts
-// instead of duplicating rows. Returns the package id (the name) and whether the
+// instead of duplicating rows. Returns the package id (the name), whether the
 // package is new or its version changed since the last scan, so the caller can
-// refresh the tracked version history.
-const upsertPackage = (object: ObjectsEntity): { id: string; versionChanged: boolean } => {
+// refresh the tracked version history. `isNewPackage` is true only when no row
+// existed before this scan.
+const upsertPackage = (object: ObjectsEntity): { id: string; versionChanged: boolean; isNewPackage: boolean } => {
   const pkg = object.package;
   const existing = packagesCollection.get(pkg.name);
-  const versionChanged = !existing || existing.version !== pkg.version;
+  const isNewPackage = !existing;
+  const versionChanged = isNewPackage || existing.version !== pkg.version;
   upsert(
     packagesCollection,
     pkg.name,
@@ -104,7 +107,7 @@ const upsertPackage = (object: ObjectsEntity): { id: string; versionChanged: boo
       publisherId: pkg.publisher?.username ?? null,
     },
   );
-  return { id: pkg.name, versionChanged };
+  return { id: pkg.name, versionChanged, isNewPackage };
 };
 
 // Fetches the full metadata for one package and records the release date of every
@@ -132,8 +135,13 @@ const ensureInsecureFlag = (): string => {
 };
 
 // Writes one scan (author or maintainer) plus all of its related rows into the
-// schema tables.
-const persistScan = async (npmUserId: string, scan: scanResult): Promise<void> => {
+// schema tables. Returns the releases worth notifying about: new packages and
+// version bumps seen in this scan. Version-history sync is best-effort — one
+// missing package must not fail the whole user scan.
+const persistScan = async (
+  npmUserId: string,
+  scan: scanResult,
+): Promise<{ packageId: string; version: string; isNewPackage: boolean }[]> => {
   const scanId = safeRandomUUID();
   scansCollection.insert({
     id: scanId,
@@ -147,12 +155,20 @@ const persistScan = async (npmUserId: string, scan: scanResult): Promise<void> =
   await packageMaintainersCollection.preload();
   await packageKeywordsCollection.preload();
   const byUsername = await loadUsersByUsername();
+  const releases: { packageId: string; version: string; isNewPackage: boolean }[] = [];
 
   for (const object of scan.objects) {
-    const { id: packageId, versionChanged } = upsertPackage(object);
+    const { id: packageId, versionChanged, isNewPackage } = upsertPackage(object);
 
     if (versionChanged) {
-      await syncPackageVersions(packageId);
+      try {
+        await syncPackageVersions(packageId);
+      } catch (error) {
+        // Keep the scan going; the job still records the new version from the
+        // search result even when the full history fetch fails.
+        console.warn(`Version history sync skipped for "${packageId}"`, error);
+      }
+      releases.push({ packageId, version: object.package.version, isNewPackage });
     }
 
     const scanPackageId = safeRandomUUID();
@@ -189,6 +205,8 @@ const persistScan = async (npmUserId: string, scan: scanResult): Promise<void> =
       upsert(packageMaintainersCollection, `${packageId}/${maintainerId}`, { packageId, userId: maintainerId });
     }
   }
+
+  return releases;
 };
 
 const setJob = (
@@ -201,7 +219,9 @@ const setJob = (
 };
 
 // Runs one tracked job to completion, driving its status as it goes: queued ->
-// running -> success | no-data | failed.
+// running -> success | no-data | failed. The first-ever scan for a user only
+// establishes the baseline and never notifies; later scans notify (when the
+// user is still enabled) about new packages and version bumps.
 export const processJob = async (jobId: string): Promise<void> => {
   const job = jobsCollection.get(jobId);
   if (!job) return;
@@ -218,6 +238,9 @@ export const processJob = async (jobId: string): Promise<void> => {
       return;
     }
 
+    await scansCollection.preload();
+    const isBaseline = !scansCollection.toArray.some((scan) => scan.npmUserId === job.npmUserId);
+
     const author = await fetchScan('author', npmUser.username);
     const maintainer = await fetchScan('maintainer', npmUser.username);
 
@@ -226,8 +249,14 @@ export const processJob = async (jobId: string): Promise<void> => {
       return;
     }
 
-    await persistScan(job.npmUserId, author);
-    await persistScan(job.npmUserId, maintainer);
+    const authorReleases = await persistScan(job.npmUserId, author);
+    const maintainerReleases = await persistScan(job.npmUserId, maintainer);
+    // The same package can appear in both scans; keep the first sighting so
+    // the notification counts it once.
+    const seen = new Set<string>();
+    const releases = [...authorReleases, ...maintainerReleases].filter((r) =>
+      seen.has(r.packageId) ? false : (seen.add(r.packageId), true),
+    );
 
     setJob(jobId, {
       status: 'success',
@@ -235,8 +264,34 @@ export const processJob = async (jobId: string): Promise<void> => {
       maintainerTotal: maintainer.total,
       finishedAt: new Date().toISOString(),
     });
+
+    if (!isBaseline && npmUser.enable && releases.length > 0) {
+      await notifyReleases(npmUser.username, releases);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error while scanning';
     setJob(jobId, { status: 'failed', error: message, finishedAt: new Date().toISOString() });
+  }
+};
+
+// Queues a fresh scan job for every enabled user and runs it. Used by the
+// "Check now" button and shared with the background task path.
+export const scanAllEnabled = async (): Promise<void> => {
+  await npmUsersCollection.preload();
+  const enabled = npmUsersCollection.toArray.filter((user) => user.enable);
+  for (const user of enabled) {
+    const jobId = safeRandomUUID();
+    jobsCollection.insert({
+      id: jobId,
+      npmUserId: user.id,
+      status: 'queued',
+      error: null,
+      authorTotal: 0,
+      maintainerTotal: 0,
+      createdAt: new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+    });
+    await processJob(jobId);
   }
 };

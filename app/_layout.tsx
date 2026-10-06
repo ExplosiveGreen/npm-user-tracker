@@ -9,7 +9,7 @@ import { registerTaskAsync } from 'expo-background-task';
 import '@/lib/tasks';
 import { ThemeProvider, useTheme } from '@/lib/theme-provider';
 import { THEME } from '@/lib/theme';
-import { SCAN_TASK_NAME } from '@/lib/tasks';
+import { SCAN_TASK_INTERVAL_MINUTES, SCAN_TASK_NAME } from '@/lib/tasks';
 
 function ThemedRoot() {
   const { resolved } = useTheme();
@@ -32,7 +32,7 @@ function ThemedRoot() {
 export default function RootLayout() {
   useEffect(() => {
     if (Platform.OS === 'web') return;
-    registerTaskAsync(SCAN_TASK_NAME, {}).catch((error) => {
+    registerTaskAsync(SCAN_TASK_NAME, { minimumInterval: SCAN_TASK_INTERVAL_MINUTES }).catch((error) => {
       console.warn('Background task registration skipped', error);
     });
   }, []);
