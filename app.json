@@ -2,7 +2,7 @@
   "expo": {
     "name": "npm user tracker",
     "slug": "npm-user-tracker",
-    "version": "1.1.0",
+    "version": "1.0.0-alpha.2",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "scheme": "mynpm",
@@ -19,7 +19,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.npmusertracker"
+      "package": "com.anonymous.npmusertracker",
+      "versionCode": 2
     },
     "web": {
       "output": "static",
