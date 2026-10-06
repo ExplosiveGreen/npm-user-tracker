@@ -2,11 +2,13 @@ appId: com.anonymous.npmusertracker
 name: offline-add-shows-retry-result
 ---
 # Runs after the harness force-ran the OS background task while still offline:
-# the fetch must have failed, so the job errors and offers a retry.
+# the fetch must have failed, so the job errors and offers a retry. The first
+# headless boot on a fresh install is slow (Hermes + collection hydration),
+# so allow minutes for the terminal state.
 - launchApp:
     clearState: false
 - extendedWaitUntil:
     visible:
       id: "retry-scan"
-    timeout: 60000
+    timeout: 300000
 - assertVisible: "Scan failed for instafluff.*"
