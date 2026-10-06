@@ -12,18 +12,20 @@ name: wrong-username-deletes-user-result
     timeout: 60000
 - assertVisible: "No npm packages found for ~t3dotgg."
 
-# Confirm deletion removes the user from the list. The tap is retried: the
-# background backfill can still be landing writes, re-rendering the list
-# mid-tap.
+# Confirm deletion removes the user from the list. Taps are fire-and-retry:
+# a tap swallowed by a hydration jank wave must not abort the loop, so the
+# loop body itself never hard-fails — the assert after it does.
 - repeat:
     while:
       notVisible: "This user might not exist"
-    times: 3
+    times: 5
     commands:
       - tapOn:
           id: "delete-user-button"
-      - extendedWaitUntil:
-          visible: "This user might not exist"
-          timeout: 10000
+          optional: true
+- assertVisible: "This user might not exist"
 - tapOn: "Delete user"
+- extendedWaitUntil:
+    visible: "Nobody tracked yet."
+    timeout: 15000
 - assertNotVisible: "~t3dotgg"
