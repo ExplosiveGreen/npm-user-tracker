@@ -22,6 +22,7 @@ import {
   type NotificationPermission,
 } from '@/lib/notifications';
 import { processJob, scanAllEnabled } from '@/lib/script';
+import { suggestUsernames } from '@/lib/suggestions';
 import {
   getScanIntervalMinutes,
   setScanIntervalMinutes,
@@ -29,8 +30,8 @@ import {
   SCAN_INTERVAL_UNITS,
   type ScanIntervalUnit,
 } from '@/lib/tasks';
-import { useEffect, useState } from 'react';
-import { Alert, ScrollView, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Link, Stack } from 'expo-router';
 
@@ -350,6 +351,13 @@ export default function Index() {
 
   const usersById = new Map((users ?? []).map((u) => [u.id, u.username]));
   const usernameOf = (job: Job) => usersById.get(job.npmUserId) ?? 'user';
+  // Autocomplete over the bundled popular-maintainers list. Already-tracked
+  // names are excluded; suggestions never write to the DB themselves.
+  const trackedNames = useMemo(
+    () => new Set((users ?? []).map((u) => u.username.toLowerCase())),
+    [users],
+  );
+  const suggestions = useMemo(() => suggestUsernames(username, trackedNames), [username, trackedNames]);
   // Newest scan wins per user so each card shows its latest outcome.
   const jobsNewestFirst = (jobs ?? [])
     .slice()
@@ -444,6 +452,21 @@ export default function Index() {
             <View className="gap-2">
               <Text className="text-lg font-semibold">Track an author</Text>
               <Input testID="username-input" onChangeText={setUsername} value={username} placeholder='npm username' />
+              {suggestions.length > 0 && (
+                <View testID="username-suggestions" className="gap-1">
+                  {suggestions.map((name) => (
+                    <Pressable
+                      key={name}
+                      testID={`username-suggestion-${name}`}
+                      accessibilityRole="button"
+                      onPress={() => setUsername(name)}
+                      className="border-border bg-card rounded-md border px-3 py-2"
+                    >
+                      <Text>{name}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
               <View className="flex-row gap-2">
                 <View className="flex-1">
                   <Button testID="add-user" onPress={addUser} className="w-full">
