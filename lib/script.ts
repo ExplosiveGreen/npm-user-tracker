@@ -385,6 +385,7 @@ const drainPendingHistories = async (budgetMs: number): Promise<void> => {
 // run continues — closing the app never loses a scan.
 export const runBackgroundScan = async (): Promise<void> => {
   console.log("[scan] background run started");
+  setTimeout(() => console.log("[scan] heartbeat: timers alive"), 5_000);
   try {
     await recoverInterruptedScans();
     console.log("[scan] recovery done");
