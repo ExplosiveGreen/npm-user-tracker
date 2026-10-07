@@ -33,6 +33,19 @@ export interface Release {
   isNewPackage: boolean;
 }
 
+// fetch() with a guaranteed timeout. Deliberately NOT AbortSignal.timeout:
+// its Hermes support is uncertain, and a missing timeout turns every
+// offline/flaky fetch into a forever-pending promise — the scan hangs in
+// `running` with no error, no retry, no failure. AbortController + setTimeout
+// exist on every RN runtime.
+const FETCH_TIMEOUT_MS = 30_000;
+
+const fetchWithTimeout = (url: string): Promise<Response> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+};
+
 // Two attempts after the first, two seconds apart — enough for transient
 // mobile-network blips without stalling background scans.
 const retryPolicy = Schedule.recurs(2).pipe(
@@ -101,7 +114,7 @@ const loadUsersByUsername = async (): Promise<Map<string, string>> => {
 const fetchJson = (url: string, operation: string): Effect.Effect<unknown, ScanError> =>
   Effect.tryPromise({
     try: () =>
-      fetch(url, { signal: AbortSignal.timeout(30_000) }).then(async (response) => {
+      fetchWithTimeout(url).then(async (response) => {
         if (!response.ok) {
           throw new Error(`status ${response.status}`);
         }
