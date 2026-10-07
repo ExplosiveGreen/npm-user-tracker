@@ -382,7 +382,9 @@ export const runBackgroundScan = async (): Promise<void> => {
   console.log("[scan] background run started");
   try {
     await recoverInterruptedScans();
+    console.log("[scan] recovery done");
     await scanAllEnabled();
+    console.log("[scan] sweep done, draining histories");
     // ~8 minutes: fits inside Android's ~10-minute JobScheduler window; on iOS
     // the OS kills earlier anyway and the remainder resumes next run.
     await drainPendingHistories(8 * 60_000);
@@ -532,6 +534,9 @@ const runScan = (job: Job): Effect.Effect<void, ScanError> =>
     const [author, maintainer] = yield* Effect.all(
       [fetchScan("author", npmUser.username), fetchScan("maintainer", npmUser.username)],
       { concurrency: 2 },
+    );
+    console.log(
+      `[scan] fetched ${npmUser.username}: author=${author.total} maintainer=${maintainer.total}`,
     );
 
     if (author.total === 0 && maintainer.total === 0) {
