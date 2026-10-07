@@ -252,17 +252,28 @@ async function refreshCollection(collection: AnyCollection, id: string): Promise
     `SELECT key, value FROM "${reg[0]!.table_name}"`,
   );
   const stale = new Set(collection.keys());
+  let added = 0;
+  let updated = 0;
   for (const { key, value } of rows) {
     const row = JSON.parse(value) as Record<string, unknown>;
     stale.delete(key);
     const current = collection.get(key);
     if (current === undefined) {
       collection.insert(row);
+      added++;
     } else if (JSON.stringify(stripVirtualProps(current)) !== JSON.stringify(row)) {
       collection.update(key, (draft) => Object.assign(draft, row));
+      updated++;
     }
   }
-  for (const key of stale) collection.delete(key);
+  let removed = 0;
+  for (const key of stale) {
+    collection.delete(key);
+    removed++;
+  }
+  if (added + updated + removed > 0) {
+    console.log(`[scan] refresh ${id}: +${added} ~${updated} -${removed}`);
+  }
 }
 
 const refreshable: Array<{ collection: AnyCollection; id: string }> = [
@@ -280,7 +291,11 @@ const refreshable: Array<{ collection: AnyCollection; id: string }> = [
 
 export async function refreshCollections(): Promise<void> {
   for (const { collection, id } of refreshable) {
-    await refreshCollection(collection, id);
+    try {
+      await refreshCollection(collection, id);
+    } catch (error) {
+      console.warn(`[scan] refresh ${id} skipped`, error);
+    }
   }
 }
 
