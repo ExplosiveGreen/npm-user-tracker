@@ -6,10 +6,14 @@ name: online-retry-populates-tables-result
 # success state and that every table received at least one row.
 - launchApp:
     clearState: false
-# Histories backfill after the job succeeds, so allow time for that.
-- extendedWaitUntil:
-    visible: "Done: instafluff.*"
+# Histories backfill after the job succeeds, so allow time for that. The Done
+# label lives on the tracked-author card below the fold — scroll it into view
+# (a successful scan shows nothing in "Needs attention" by design).
+- scrollUntilVisible:
+    element:
+      text: "Done: instafluff.*"
     timeout: 300000
+- assertVisible: "Done: instafluff.*"
 
 # Npm users show up on the home screen once persisted (below the fold —
 # scroll it into view first).
