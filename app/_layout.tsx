@@ -3,13 +3,14 @@ import "react-native-random-uuid";
 import { PortalHost } from '@rn-primitives/portal';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
-import { Platform } from 'react-native';
 import '@/lib/tasks';
 import { ThemeProvider, useTheme } from '@/lib/theme-provider';
 import { THEME } from '@/lib/theme';
+import { refreshCollections } from '@/db';
 import { recoverInterruptedScans } from '@/lib/script';
 import { registerScanTask } from '@/lib/tasks';
+import { useEffect } from 'react';
+import { AppState, Platform } from 'react-native';
 
 function ThemedRoot() {
   const { resolved } = useTheme();
@@ -42,6 +43,17 @@ export default function RootLayout() {
     recoverInterruptedScans().catch((error) => {
       console.warn('Interrupted scan recovery skipped', error);
     });
+    // The background task writes SQLite from a runtime that shares no memory
+    // with this one: reload collections every foregrounding so rows the
+    // background changed (job outcomes, new packages) actually appear.
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        refreshCollections().catch((error) => {
+          console.warn('Collection refresh skipped', error);
+        });
+      }
+    });
+    return () => subscription.remove();
   }, []);
 
   return (

@@ -216,6 +216,26 @@ export const jobsCollection = createCollection<Job, string>(
   }),
 );
 
+// Re-reads every collection from SQLite into memory. Needed because the OS
+// background task writes the same database from a headless JS runtime that
+// shares no memory with the foreground: without an explicit reload, the open
+// app keeps showing stale rows (e.g. a job the background just failed still
+// renders as queued) until something remounts. Call on foregrounding.
+export async function refreshCollections(): Promise<void> {
+  await Promise.all([
+    npmUsersCollection.preload(),
+    scansCollection.preload(),
+    packagesCollection.preload(),
+    packageMaintainersCollection.preload(),
+    packageKeywordsCollection.preload(),
+    scanPackagesCollection.preload(),
+    flagsCollection.preload(),
+    packageFlagsCollection.preload(),
+    packageVersionsCollection.preload(),
+    jobsCollection.preload(),
+  ]);
+}
+
 // Registry of persisted collections used to render the DB explorer screens. The
 // collection is stored loosely so the screens can render arbitrary rows.
 export type DbTable = {
