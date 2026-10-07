@@ -7,7 +7,7 @@
 // the network toggles cannot live in Maestro flows (it has no shell) so they
 // live here with the flows split around them.
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -127,6 +127,34 @@ function ensureQueued(name, tries = 3) {
   throw new Error(`Add user never queued for ${name}`);
 }
 
+// Dumps ground truth after each forced run: the [scan] log lines plus the
+// jobs/users rows straight from SQLite (root is available on the emulator).
+// Suite failures then come with answers instead of screenshots guessing.
+function collectEvidence(tag) {
+  try {
+    const logs = tryRun(ADB, ['shell', 'logcat', '-d']);
+    const lines = logs.stdout.split('\n').filter((l) => l.includes('[scan]'));
+    writeFileSync(
+      path.join(os.tmpdir(), `e2e-${tag}.log`),
+      lines.join('\n') + '\n',
+    );
+    console.log(`--- evidence ${tag}: ${lines.length} scan lines ---`);
+    for (const l of lines.slice(-12)) console.log(`    ${l.slice(0, 160)}`);
+    const db = '/data/data/com.anonymous.npmusertracker/files/SQLite/npm-user-tracker.db';
+    const reg = tryRun(ADB, ['shell', `sqlite3 ${db} 'SELECT collection_id, table_name FROM collection_registry;'`]);
+    for (const row of reg.stdout.trim().split('\n')) {
+      const [cid, table] = row.split('|');
+      if (cid !== 'jobs' && cid !== 'npm-users') continue;
+      const res = tryRun(ADB, ['shell', `sqlite3 ${db} "SELECT substr(value,1,140) FROM ${table};"`]);
+      for (const r of res.stdout.trim().split('\n').filter(Boolean)) {
+        console.log(`    [${cid}] ${r.slice(0, 150)}`);
+      }
+    }
+  } catch (err) {
+    console.log(`evidence collection failed: ${err.message}`);
+  }
+}
+
 // Scans run exclusively in the OS background task, so the flows can only
 // queue work from the UI. This forces the scheduled WorkManager job to run
 // right now via adb (Expo's documented recipe) instead of waiting for the OS
@@ -197,6 +225,7 @@ try {
   // or the forced run sees an empty database and finishes doing nothing.
   sleep(20000);
   forceBackgroundScan();
+  collectEvidence('wrong-username');
   maestro('wrong-username-result.yaml');
 
   console.log('== Offline: adding a user queues a job, background run fails it ==');
@@ -206,6 +235,7 @@ try {
   ensureQueued('instafluff');
   sleep(20000);
   forceBackgroundScan();
+  collectEvidence('offline');
   maestro('offline-add-result.yaml');
 
   console.log('== Online: retry + background run populates all tables ==');
@@ -216,6 +246,7 @@ try {
   sleep(15000);
   maestro('online-retry-queue.yaml');
   forceBackgroundScan();
+  collectEvidence('online');
   maestro('online-retry-result.yaml');
 
   console.log('== Table screen: delete a row ==');
