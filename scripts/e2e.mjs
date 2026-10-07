@@ -151,9 +151,9 @@ function forceBackgroundScan() {
       console.log(`Forcing background job ${jobId} (attempt ${attempt})...`);
       adb('shell', 'cmd', 'jobscheduler', 'run', '-f', APP_PKG, jobId);
     }
-    if (waitForLog('\\[scan\\] background run started', 60000)) {
-      // Let the run progress; the result flows gate on terminal states.
-      sleep(60000);
+    if (waitForLog('\\[scan\\] background run (finished|failed)', 420000)) {
+      // Let the UI settle on the new rows; the result flows gate on them.
+      sleep(10000);
       return;
     }
     console.log(`Force attempt ${attempt} started nothing, retrying...`);
