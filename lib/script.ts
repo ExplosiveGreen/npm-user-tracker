@@ -33,51 +33,43 @@ export interface Release {
   isNewPackage: boolean;
 }
 
-// fetch() with a guaranteed timeout. Implemented as a race, deliberately NOT
-// via AbortSignal: a missing/broken abort path (uncertain across Hermes builds
-// and XHR polyfills) turns every offline/flaky fetch into a forever-pending
-// promise — the scan hangs in `running` with no error, no retry, no failure.
-// The timeout half always settles; a hung winner is simply abandoned.
+// Network fetch with a timeout enforced NATIVELY (XMLHttpRequest.timeout ->
+// OkHttp), never by JS timers: the headless background runtime cannot be
+// trusted to fire setTimeout, and any timer-based timeout (AbortSignal,
+// Promise.race) would leave offline/flaky fetches pending forever — the scan
+// then hangs in `running` with no error, no retry, no failure.
 const FETCH_TIMEOUT_MS = 30_000;
 
-const fetchWithTimeout = (url: string): Promise<Response> => {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`timed out after ${FETCH_TIMEOUT_MS}ms`)), FETCH_TIMEOUT_MS);
+const fetchWithTimeout = (url: string): Promise<Response> =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url);
+    xhr.timeout = FETCH_TIMEOUT_MS;
+    xhr.onload = () => {
+      resolve(new Response(xhr.responseText, { status: xhr.status }));
+    };
+    xhr.onerror = () => reject(new Error("network request failed"));
+    xhr.ontimeout = () => reject(new Error(`timed out after ${FETCH_TIMEOUT_MS}ms`));
+    xhr.onabort = () => reject(new Error("request aborted"));
+    xhr.send();
   });
-  return Promise.race([fetch(url), timeout]).finally(() => clearTimeout(timer!));
-};
 
-// Two attempts after the first, two seconds apart — enough for transient
-// mobile-network blips without stalling background scans.
-const retryPolicy = Schedule.recurs(2).pipe(
-  Schedule.addDelay(() => Effect.succeed("2 seconds" as const)),
-);
-
-// Yields to the JS event loop so touches, scrolls, and Switch toggles are
-// processed between scan batches. (Effect.yieldNow only yields to the Effect
-// runtime — only a real macrotask lets the UI thread breathe.) Awaiting one
-// of these every few packages keeps the app responsive while a big scan
-// (e.g. a prolific author like tannerlinsley) churns through hundreds of
-// network + SQLite writes.
-const yieldToUI = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+// Two immediate retries after the first. Deliberately delay-free: retry delays
+// need JS timers, which the headless runtime may never fire — a delayed retry
+// would hang the scan the same way a hung fetch does.
+const retryPolicy = Schedule.recurs(2);
 
 // Fast-phase writes are pure search-result upserts (no version-history
 // fetches), so a small concurrency is plenty; version history syncs each pull
 // a full metadata document (often 100KB+) and JSON.parse blocks the thread,
-// so they run at lower concurrency in the background after the job succeeds.
+// so they run at lower concurrency in a second phase the job awaits.
 const PACKAGE_WRITE_CONCURRENCY = 3;
 const VERSION_SYNC_CONCURRENCY = 2;
-// SQLite-backed collection writes each notify live-query subscribers, so a
-// package with hundreds of versions would re-render lists hundreds of times
-// in a tight loop — yield periodically to let input/scroll events through.
-const VERSION_INSERT_YIELD_EVERY = 50;
 
-// Retry budget for one job: this many immediate retries after a short delay,
-// then the job waits for the next scheduled scan ("a later date"). Fresh jobs
-// from "Check now" / the background task always start at 0.
+// Retry budget for one job: while attempts remain, recovery requeues failed
+// jobs; past that they wait for a fresh sweep job from the next scheduled
+// run ("a later date"). Fresh sweep jobs always start at 0.
 const MAX_IMMEDIATE_RETRIES = 2;
-const RETRY_DELAY_MS = 30_000;
 
 // Durable backfill queue: package ids whose version history still needs
 // syncing. Saved to prefs before the backfill starts and pruned as packages
@@ -269,10 +261,9 @@ const toTimeRecord = (json: unknown): Record<string, string> => {
 // `created` and `modified` are registry bookkeeping timestamps, not versions,
 // so they are skipped. Only the `time` map is decoded — the full metadata
 // document can be megabytes. Versions are upserted so overlapping
-// author/maintainer scans and re-scans only fill in missing rows. Inserts are
-// chunked with yields: each write notifies live-query subscribers (which
-// re-sort lists), so a package with hundreds of versions must not write them
-// in one tight loop or the UI freezes until it finishes.
+// author/maintainer scans and re-scans only fill in missing rows. No event-loop
+// yields here: the headless runtime may never fire timers, and every fetch
+// await already hands the thread back for UI work in between.
 const syncPackageVersions = (packageId: string): Effect.Effect<void, ScanError> =>
   Effect.gen(function* () {
     const operation = `fetching versions for "${packageId}"`;
@@ -285,52 +276,43 @@ const syncPackageVersions = (packageId: string): Effect.Effect<void, ScanError> 
         (issue) => new ScanError({ operation, message: `invalid version history: ${String(issue)}` }),
       ),
     );
-    const entries = Object.entries(time).filter(([version]) => version !== "created" && version !== "modified");
-    for (let i = 0; i < entries.length; i += VERSION_INSERT_YIELD_EVERY) {
-      const chunk = entries.slice(i, i + VERSION_INSERT_YIELD_EVERY);
-      yield* Effect.sync(() => {
-        for (const [version, date] of chunk) {
-          upsert(packageVersionsCollection, `${packageId}/${version}`, { packageId, version, date });
-        }
-      });
-      yield* Effect.promise(() => yieldToUI());
-    }
+    yield* Effect.sync(() => {
+      for (const [version, date] of Object.entries(time)) {
+        if (version === "created" || version === "modified") continue;
+        upsert(packageVersionsCollection, `${packageId}/${version}`, { packageId, version, date });
+      }
+    });
   });
 
-// Deferred version-history backfill. The job is already marked success before
-// this runs: search results alone determine releases/notifications, while the
-// full per-version history streams in afterwards at low concurrency. If the OS
-// kills a background task mid-backfill, the next scan upserts the missing rows.
-// The pending list is durable (prefs): whatever was already applied stays
-// applied (idempotent upserts), and whatever hadn't finished resumes later.
-const backfillVersionHistories = (packageIds: ReadonlyArray<string>): void => {
-  const unique = [...new Set(packageIds)];
-  const merged = [...new Set([...getPendingHistories(), ...unique])].slice(-MAX_PENDING_HISTORIES);
-  if (merged.length === 0) return;
-  setPendingHistories(merged);
-  void Effect.runPromise(
-    Effect.gen(function* () {
-      yield* Effect.promise(() => packageVersionsCollection.preload());
-      // Preload once up front instead of once per package.
-      yield* Effect.forEach(merged, (packageId) =>
-        syncPackageVersions(packageId).pipe(
-          Effect.matchEffect({
-            // Stays in the pending list — retried on a later launch/scan.
-            onFailure: (error) =>
-              Effect.sync(() => {
-                console.warn(`Version history sync skipped for "${packageId}"`, error.message);
-              }),
-            onSuccess: () =>
-              Effect.sync(() => {
-                // Read-modify-write inside one sync block: no yield inside,
-                // so concurrent fibers can't interleave and lose a removal.
-                setPendingHistories(getPendingHistories().filter((id) => id !== packageId));
-              }),
-          }),
-        ), { concurrency: VERSION_SYNC_CONCURRENCY });
-    }),
-  );
-};
+// Version-history backfill, awaited inline by the running job: search results
+// alone determine releases/notifications, while the full per-version history
+// streams in afterwards at low concurrency before the job is marked success.
+// Awaited (never detached): when the OS task's window ends, detached work dies
+// with it. If the OS kills mid-backfill, the durable pending list plus
+// idempotent upserts let the next run continue where this one stopped.
+const backfillVersionHistories = (packageIds: ReadonlyArray<string>): Effect.Effect<void, never> =>
+  Effect.gen(function* () {
+    const unique = [...new Set(packageIds)];
+    const merged = [...new Set([...getPendingHistories(), ...unique])].slice(-MAX_PENDING_HISTORIES);
+    if (merged.length === 0) return;
+    setPendingHistories(merged);
+    yield* Effect.promise(() => packageVersionsCollection.preload());
+    // Preload once up front instead of once per package.
+    yield* Effect.forEach(merged, (packageId) =>
+      syncPackageVersions(packageId).pipe(
+        Effect.matchEffect({
+          // Stays in the pending list — retried on a later launch/scan.
+          onFailure: (error) =>
+            Effect.sync(() => {
+              console.warn(`Version history sync skipped for "${packageId}"`, error.message);
+            }),
+          onSuccess: () =>
+            Effect.sync(() => {
+              setPendingHistories(getPendingHistories().filter((id) => id !== packageId));
+            }),
+        }),
+      ), { concurrency: VERSION_SYNC_CONCURRENCY });
+  });
 
 // Enqueues a scan job for one user without running it. The foreground NEVER
 // executes scans — it only writes jobs. Execution belongs exclusively to the
@@ -366,34 +348,18 @@ export const enqueueSweep = (): void => {
   }
 };
 
-// Waits until the version-history backfill drains (or the budget runs out).
-// Used by the background task: unlike the foreground, which detaches the
-// backfill and stays interactive, the headless task holds its OS execution
-// window open so histories actually finish while the app is closed. Whatever
-// doesn't fit in the budget stays queued and resumes on the next run.
-const drainPendingHistories = async (budgetMs: number): Promise<void> => {
-  const deadline = Date.now() + budgetMs;
-  while (getPendingHistories().length > 0 && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
-  }
-};
-
 // One full background execution: finish anything a killed session left behind
-// (interrupted jobs resume, failed jobs retry, backfill continues), sweep all
-// enabled users, then hold the execution window until histories drain. Every
-// step is idempotent and durable, so an OS kill mid-run just means the next
-// run continues — closing the app never loses a scan.
+// (interrupted jobs resume, failed jobs retry, backfill continues), then sweep
+// all enabled users. Every step is idempotent and durable, so an OS kill
+// mid-run just means the next run continues — closing the app never loses a
+// scan. No timers anywhere in this path: the headless runtime may never fire
+// them, so nothing here may depend on setTimeout to settle.
 export const runBackgroundScan = async (): Promise<void> => {
   console.log("[scan] background run started");
-  setTimeout(() => console.log("[scan] heartbeat: timers alive"), 5_000);
   try {
     await recoverInterruptedScans();
     console.log("[scan] recovery done");
     await scanAllEnabled();
-    console.log("[scan] sweep done, draining histories");
-    // ~8 minutes: fits inside Android's ~10-minute JobScheduler window; on iOS
-    // the OS kills earlier anyway and the remainder resumes next run.
-    await drainPendingHistories(8 * 60_000);
     console.log("[scan] background run finished");
   } catch (error) {
     console.warn("[scan] background run failed", error);
@@ -475,10 +441,9 @@ const processSearchObject = (
 
 // Writes one scan (author or maintainer) plus all of its related rows into the
 // schema tables. Returns the releases worth notifying about plus the package
-// ids whose version history still needs backfilling. Objects are processed in
-// small batches with a yield between batches: every write notifies live-query
-// subscribers, and without yielding a 100+ package scan starves touches and
-// scrolls until it finishes.
+// ids whose version history still needs backfilling. No event-loop yields:
+// the headless runtime may never fire timers, and every fetch await already
+// hands the thread back between network round-trips.
 const persistScan = (
   npmUserId: string,
   scan: scanResult,
@@ -498,17 +463,12 @@ const persistScan = (
 
     const releases: Array<Release> = [];
     const historyPending: Array<string> = [];
-    for (let i = 0; i < scan.objects.length; i += PACKAGE_WRITE_CONCURRENCY) {
-      const batch = scan.objects.slice(i, i + PACKAGE_WRITE_CONCURRENCY);
-      const results = yield* Effect.forEach(batch, (object) => processSearchObject(scanId, object, byUsername), {
-        concurrency: PACKAGE_WRITE_CONCURRENCY,
-      });
-      for (const { release, historyPending: pending } of results) {
-        if (release) releases.push(release);
-        if (pending) historyPending.push(pending);
-      }
-      // Let taps, scrolls, and Switch toggles process before the next batch.
-      yield* Effect.promise(() => yieldToUI());
+    const results = yield* Effect.forEach(scan.objects, (object) => processSearchObject(scanId, object, byUsername), {
+      concurrency: PACKAGE_WRITE_CONCURRENCY,
+    });
+    for (const { release, historyPending: pending } of results) {
+      if (release) releases.push(release);
+      if (pending) historyPending.push(pending);
     }
     return { releases, historyPending };
   });
@@ -569,8 +529,6 @@ const runScan = (job: Job): Effect.Effect<void, ScanError> =>
       author,
       byUsername,
     );
-    // Yield between the two scans so a big author result can't starve input.
-    yield* Effect.promise(() => yieldToUI());
     const { releases: maintainerReleases, historyPending: maintainerPending } = yield* persistScan(
       job.npmUserId,
       maintainer,
@@ -602,11 +560,11 @@ const runScan = (job: Job): Effect.Effect<void, ScanError> =>
       );
     }
 
-    // Backfill full version histories after the job is Done. This is the slow
-    // part (one full metadata document per new/changed package) and it runs
-    // detached at low concurrency with yields, so "Recent updates" fills in
-    // gradually while the UI stays interactive.
-    yield* Effect.sync(() => backfillVersionHistories([...authorPending, ...maintainerPending]));
+    // Full version histories stream in last, awaited inline (never detached:
+    // detached work dies with the OS window). A kill mid-backfill resumes via
+    // the durable pending list on the next run.
+    yield* backfillVersionHistories([...authorPending, ...maintainerPending]);
+    console.log(`[scan] job ${job.id} finished for ${npmUser.username}`);
   });
 
 // Runs one tracked job to completion, driving its status as it goes: queued ->
@@ -635,7 +593,9 @@ export const processJob = (jobId: string): Promise<void> => {
               attempts,
               finishedAt: new Date().toISOString(),
             });
-            if (attempts <= MAX_IMMEDIATE_RETRIES) scheduleRetry(jobId);
+            // No delayed retry here: timers may never fire headless. Retry
+            // coverage comes from recovery (requeues while budget remains)
+            // and fresh sweep jobs on later runs.
           }),
         onSuccess: () => Effect.void,
       }),
@@ -662,23 +622,6 @@ const isStaleRunning = (job: Job): boolean => {
   const started = job.startedAt ? Date.parse(job.startedAt) : NaN;
   if (Number.isNaN(started)) return true;
   return Date.now() - started > STALE_RUNNING_MS;
-};
-
-// One-shot delayed retry for a failed job. Guards: never double-schedule, and
-// re-checks the job is still `failed` at fire time (the user may have tapped
-// Retry or deleted it meanwhile). The timer only lives while the app does —
-// a killed app retries via recoverInterruptedScans on next launch instead.
-const scheduledRetries = new Set<string>();
-
-const scheduleRetry = (jobId: string, delayMs: number = RETRY_DELAY_MS): void => {
-  if (scheduledRetries.has(jobId)) return;
-  scheduledRetries.add(jobId);
-  setTimeout(() => {
-    scheduledRetries.delete(jobId);
-    const job = jobsCollection.get(jobId);
-    if (!job || job.status !== "failed") return;
-    void processJob(jobId);
-  }, delayMs);
 };
 
 // Requeues scan work left behind by a killed session. Requeue-ONLY: the
