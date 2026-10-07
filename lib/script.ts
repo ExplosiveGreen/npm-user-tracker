@@ -33,17 +33,19 @@ export interface Release {
   isNewPackage: boolean;
 }
 
-// fetch() with a guaranteed timeout. Deliberately NOT AbortSignal.timeout:
-// its Hermes support is uncertain, and a missing timeout turns every
-// offline/flaky fetch into a forever-pending promise — the scan hangs in
-// `running` with no error, no retry, no failure. AbortController + setTimeout
-// exist on every RN runtime.
+// fetch() with a guaranteed timeout. Implemented as a race, deliberately NOT
+// via AbortSignal: a missing/broken abort path (uncertain across Hermes builds
+// and XHR polyfills) turns every offline/flaky fetch into a forever-pending
+// promise — the scan hangs in `running` with no error, no retry, no failure.
+// The timeout half always settles; a hung winner is simply abandoned.
 const FETCH_TIMEOUT_MS = 30_000;
 
 const fetchWithTimeout = (url: string): Promise<Response> => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${FETCH_TIMEOUT_MS}ms`)), FETCH_TIMEOUT_MS);
+  });
+  return Promise.race([fetch(url), timeout]).finally(() => clearTimeout(timer!));
 };
 
 // Two attempts after the first, two seconds apart — enough for transient
