@@ -218,22 +218,70 @@ export const jobsCollection = createCollection<Job, string>(
 
 // Re-reads every collection from SQLite into memory. Needed because the OS
 // background task writes the same database from a headless JS runtime that
-// shares no memory with the foreground: without an explicit reload, the open
-// app keeps showing stale rows (e.g. a job the background just failed still
-// renders as queued) until something remounts. Call on foregrounding.
+// shares no memory with the foreground — and TanStack has no cross-runtime
+// change feed (preload() is a documented no-op after first load, and cleanup()
+// would deafen live queries by clearing their subscriptions). So this diffs
+// the persisted rows against memory and applies normal insert/update/delete
+// mutations, which notify subscribers properly. Call on foregrounding.
+type AnyCollection = {
+  keys(): IterableIterator<string>;
+  get(key: string): unknown;
+  insert(row: Record<string, unknown>): unknown;
+  update(key: string, fn: (draft: Record<string, unknown>) => void): unknown;
+  delete(key: string): unknown;
+};
+
+const stripVirtualProps = (obj: unknown): unknown => {
+  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (!k.startsWith("$")) out[k] = v;
+    }
+    return out;
+  }
+  return obj;
+};
+
+async function refreshCollection(collection: AnyCollection, id: string): Promise<void> {
+  const reg = await database.getAllAsync<{ table_name: string }>(
+    `SELECT table_name FROM collection_registry WHERE collection_id = ?`,
+    [id],
+  );
+  if (reg.length === 0) return; // never persisted (fresh install, nothing written yet)
+  const rows = await database.getAllAsync<{ key: string; value: string }>(
+    `SELECT key, value FROM "${reg[0]!.table_name}"`,
+  );
+  const stale = new Set(collection.keys());
+  for (const { key, value } of rows) {
+    const row = JSON.parse(value) as Record<string, unknown>;
+    stale.delete(key);
+    const current = collection.get(key);
+    if (current === undefined) {
+      collection.insert(row);
+    } else if (JSON.stringify(stripVirtualProps(current)) !== JSON.stringify(row)) {
+      collection.update(key, (draft) => Object.assign(draft, row));
+    }
+  }
+  for (const key of stale) collection.delete(key);
+}
+
+const refreshable: Array<{ collection: AnyCollection; id: string }> = [
+  { collection: npmUsersCollection as unknown as AnyCollection, id: "npm-users" },
+  { collection: scansCollection as unknown as AnyCollection, id: "scans" },
+  { collection: packagesCollection as unknown as AnyCollection, id: "packages" },
+  { collection: packageMaintainersCollection as unknown as AnyCollection, id: "package-maintainers" },
+  { collection: packageKeywordsCollection as unknown as AnyCollection, id: "package-keywords" },
+  { collection: scanPackagesCollection as unknown as AnyCollection, id: "scan-packages" },
+  { collection: flagsCollection as unknown as AnyCollection, id: "flags" },
+  { collection: packageFlagsCollection as unknown as AnyCollection, id: "package-flags" },
+  { collection: packageVersionsCollection as unknown as AnyCollection, id: "package-versions" },
+  { collection: jobsCollection as unknown as AnyCollection, id: "jobs" },
+];
+
 export async function refreshCollections(): Promise<void> {
-  await Promise.all([
-    npmUsersCollection.preload(),
-    scansCollection.preload(),
-    packagesCollection.preload(),
-    packageMaintainersCollection.preload(),
-    packageKeywordsCollection.preload(),
-    scanPackagesCollection.preload(),
-    flagsCollection.preload(),
-    packageFlagsCollection.preload(),
-    packageVersionsCollection.preload(),
-    jobsCollection.preload(),
-  ]);
+  for (const { collection, id } of refreshable) {
+    await refreshCollection(collection, id);
+  }
 }
 
 // Registry of persisted collections used to render the DB explorer screens. The
