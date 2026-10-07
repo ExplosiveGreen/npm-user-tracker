@@ -133,7 +133,7 @@ function ensureQueued(name, tries = 3) {
 // window. Forcing is flaky (stale job entries, occupied worker slots), so it
 // verifies the job actually left `queued` via UI dumps and retries the force.
 function forceBackgroundScan() {
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
     adb('shell', 'input', 'keyevent', 'KEYCODE_HOME');
     sleep(1000);
     const dump = tryRun(ADB, ['shell', 'dumpsys', 'jobscheduler']);
@@ -146,29 +146,29 @@ function forceBackgroundScan() {
       }
     }
     if (ours.size === 0) throw new Error('No scheduled background job found for the release app.');
+    adb('shell', 'logcat', '-c');
     for (const jobId of ours) {
       console.log(`Forcing background job ${jobId} (attempt ${attempt})...`);
       adb('shell', 'cmd', 'jobscheduler', 'run', '-f', APP_PKG, jobId);
     }
-    // The forced run needs the app backgrounded, but the UI must be visible
-    // to observe it — bring it back and watch for the queued row to flip.
-    adb('shell', 'am', 'start', '-n', `${APP_PKG}/.MainActivity`);
-    if (waitForScanStart()) {
+    if (waitForLog('\\[scan\\] background run started', 60000)) {
       // Let the run progress; the result flows gate on terminal states.
       sleep(60000);
       return;
     }
     console.log(`Force attempt ${attempt} started nothing, retrying...`);
   }
-  throw new Error('Background scan never started after 3 force attempts.');
+  throw new Error('Background scan never started after 4 force attempts.');
 }
 
-// True once no `Queued: scanning …` row remains (it flipped to running,
-// failed, or done) — or false after the timeout.
-function waitForScanStart(timeoutMs = 90000) {
+// True once logcat shows a line matching pattern (our [scan] lifecycle logs
+// prove OUR code executed, not just that adb accepted the command).
+function waitForLog(pattern, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
+  const re = new RegExp(pattern);
   while (Date.now() < deadline) {
-    if (!uiDump().includes('Queued: scanning')) return true;
+    const out = tryRun(ADB, ['shell', 'logcat', '-d']);
+    if (re.test(out.stdout)) return true;
     sleep(5000);
   }
   return false;
