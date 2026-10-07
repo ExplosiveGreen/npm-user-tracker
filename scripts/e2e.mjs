@@ -130,27 +130,48 @@ function ensureQueued(name, tries = 3) {
 // Scans run exclusively in the OS background task, so the flows can only
 // queue work from the UI. This forces the scheduled WorkManager job to run
 // right now via adb (Expo's documented recipe) instead of waiting for the OS
-// window. The app must be backgrounded first — forced jobs won't run while
-// the app is in the foreground.
+// window. Forcing is flaky (stale job entries, occupied worker slots), so it
+// verifies the job actually left `queued` via UI dumps and retries the force.
 function forceBackgroundScan() {
-  adb('shell', 'input', 'keyevent', 'KEYCODE_HOME');
-  sleep(1000);
-  const dump = tryRun(ADB, ['shell', 'dumpsys', 'jobscheduler']);
-  // Narrow to this app's WorkManager jobs (component SystemJobService).
-  const ours = new Set();
-  for (const line of dump.stdout.split('\n')) {
-    if (line.includes(APP_PKG) && line.includes('SystemJobService')) {
-      const m = line.match(/\/(\d+):/);
-      if (m) ours.add(m[1]);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    adb('shell', 'input', 'keyevent', 'KEYCODE_HOME');
+    sleep(1000);
+    const dump = tryRun(ADB, ['shell', 'dumpsys', 'jobscheduler']);
+    // Narrow to this app's WorkManager jobs (component SystemJobService).
+    const ours = new Set();
+    for (const line of dump.stdout.split('\n')) {
+      if (line.includes(APP_PKG) && line.includes('SystemJobService')) {
+        const m = line.match(/\/(\d+):/);
+        if (m) ours.add(m[1]);
+      }
     }
+    if (ours.size === 0) throw new Error('No scheduled background job found for the release app.');
+    for (const jobId of ours) {
+      console.log(`Forcing background job ${jobId} (attempt ${attempt})...`);
+      adb('shell', 'cmd', 'jobscheduler', 'run', '-f', APP_PKG, jobId);
+    }
+    // The forced run needs the app backgrounded, but the UI must be visible
+    // to observe it — bring it back and watch for the queued row to flip.
+    adb('shell', 'am', 'start', '-n', `${APP_PKG}/.MainActivity`);
+    if (waitForScanStart()) {
+      // Let the run progress; the result flows gate on terminal states.
+      sleep(60000);
+      return;
+    }
+    console.log(`Force attempt ${attempt} started nothing, retrying...`);
   }
-  if (ours.size === 0) throw new Error('No scheduled background job found for the release app.');
-  for (const jobId of ours) {
-    console.log(`Forcing background job ${jobId}...`);
-    adb('shell', 'cmd', 'jobscheduler', 'run', '-f', APP_PKG, jobId);
+  throw new Error('Background scan never started after 3 force attempts.');
+}
+
+// True once no `Queued: scanning …` row remains (it flipped to running,
+// failed, or done) — or false after the timeout.
+function waitForScanStart(timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!uiDump().includes('Queued: scanning')) return true;
+    sleep(5000);
   }
-  // Let the headless run (fetch + writes + history drain) finish.
-  sleep(120000);
+  return false;
 }
 function cleanup() {
   console.log('== Cleanup ==');
