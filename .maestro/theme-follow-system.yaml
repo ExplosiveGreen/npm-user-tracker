@@ -3,9 +3,8 @@ name: theme-follows-system-and-pins-override
 ---
 # Runs with the device OS in DARK mode (forced by scripts/e2e.mjs via
 # `adb shell cmd uimode night yes` before this flow). Fresh install, no
-# stored preference, so the page follows the dark OS. Also covers the reverse
-# direction: pinning LIGHT over a dark system (an informed override rather than
-# a release) and then releasing it back.
+# stored preference, so the page follows the dark OS. Covers the header
+# button contract in the other direction.
 - launchApp:
     clearState: true
 - extendedWaitUntil:
@@ -13,44 +12,13 @@ name: theme-follows-system-and-pins-override
       id: "username-input"
     timeout: 120000
 
-# Fresh install: no stored override, page follows the dark OS, strong theme on.
-- assertVisible: "Dark mode"
-- assertVisible: "Following system \\(dark\\)"
+# Following dark OS: the button offers light.
 - assertVisible: "^Light$"
-- assertVisible:
-    id: "dark-mode-switch"
-    enabled: true
 
-# Flip off: target (dark -> light) differs from the dark OS, so light is pinned
-# (an informed override), not released. Dev-menu self-healing as in theme-toggle.
-- repeat:
-    while:
-      notVisible: "Set to light"
-    times: 3
-    commands:
-      - tapOn:
-          id: "dark-mode-switch"
-      - runFlow:
-          when:
-            visible: "Go home"
-          commands:
-            - back
-- assertVisible: "Set to light"
+# Tap: pins light, so the button now offers dark.
+- tapOn: "Light"
 - assertVisible: "^Dark$"
 
-# Flip back on: target (light -> dark) matches the dark OS again, so the pin
-# is released and the page returns to following the system.
-- repeat:
-    while:
-      notVisible: "Following system \\(dark\\)"
-    times: 3
-    commands:
-      - tapOn:
-          id: "dark-mode-switch"
-      - runFlow:
-          when:
-            visible: "Go home"
-          commands:
-            - back
-- assertVisible: "Following system \\(dark\\)"
+# Tap: releases back to the dark OS, offering light again.
+- tapOn: "Dark"
 - assertVisible: "^Light$"

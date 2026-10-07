@@ -3,9 +3,10 @@ name: theme-toggle-pins-and-releases
 ---
 # Runs with the device OS in LIGHT mode (forced by scripts/e2e.mjs via
 # `adb shell cmd uimode night no` before this flow). Starts from a clean
-# install, so the app has no stored preference and follows the OS. Exercises the
-# Lea Verou toggle contract: pin the opposite scheme, then release back to the
-# OS when the target coincides with the system again.
+# install, so the app follows the OS (light). The home screen no longer has
+# the full dark-mode card (removed in favor of the header toggle), so this
+# covers the header button contract: it always labels the scheme a tap would
+# switch to, flipping back and forth.
 - launchApp:
     clearState: true
 - extendedWaitUntil:
@@ -13,43 +14,13 @@ name: theme-toggle-pins-and-releases
       id: "username-input"
     timeout: 120000
 
-# Fresh install: no stored override, page follows the light OS, weak theme off.
-- assertVisible: "Dark mode"
-- assertVisible: "Following system \\(light\\)"
+# Following light OS: the button offers dark.
 - assertVisible: "^Dark$"
-- assertVisible:
-    id: "dark-mode-switch"
-    enabled: true
 
-# Flip to dark: target (light -> dark) differs from the OS, so it is pinned.
-- repeat:
-    while:
-      notVisible: "Set to dark"
-    times: 3
-    commands:
-      - tapOn:
-          id: "dark-mode-switch"
-      - runFlow:
-          when:
-            visible: "Go home"
-          commands:
-            - back
-- assertVisible: "Set to dark"
+# Tap: pins dark, so the button now offers light.
+- tapOn: "Dark"
 - assertVisible: "^Light$"
 
-# Flip back: target (dark -> light) matches the OS now, so the override is
-# released and the page follows the system again.
-- repeat:
-    while:
-      notVisible: "Following system \\(light\\)"
-    times: 3
-    commands:
-      - tapOn:
-          id: "dark-mode-switch"
-      - runFlow:
-          when:
-            visible: "Go home"
-          commands:
-            - back
-- assertVisible: "Following system \\(light\\)"
+# Tap: releases back to the light OS, offering dark again.
+- tapOn: "Light"
 - assertVisible: "^Dark$"
