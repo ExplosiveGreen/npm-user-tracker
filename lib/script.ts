@@ -625,12 +625,11 @@ const isStaleRunning = (job: Job): boolean => {
 };
 
 // Requeues scan work left behind by a killed session. Requeue-ONLY: the
-// foreground never executes scans, so this resets stale `running` jobs and
-// retryable `failed` jobs back to `queued` and stops there. The background
-// task (or its next OS window) does the actual running — including the
-// persisted version-history backlog, which merges into the next backfill on
-// its own. Anything past the immediate retry budget waits for a fresh sweep
-// job from the next scheduled run.
+// foreground never executes scans. Only stale `running` jobs are reset —
+// they would otherwise linger forever. `failed` jobs are deliberately left
+// alone: their error state stays visible (with manual Retry), and the next
+// scheduled sweep retries them with a fresh job. Converting them to queued
+// here would hide failures the user should see and act on.
 export const recoverInterruptedScans = (): Promise<void> =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -642,12 +641,6 @@ export const recoverInterruptedScans = (): Promise<void> =>
       );
       for (const job of interrupted) {
         yield* Effect.sync(() => setJob(job.id, { status: "queued", startedAt: null }));
-      }
-      const retryable = jobsCollection.toArray.filter(
-        (job) => job.status === "failed" && (job.attempts ?? 0) <= MAX_IMMEDIATE_RETRIES,
-      );
-      for (const job of retryable) {
-        yield* Effect.sync(() => setJob(job.id, { status: "queued", error: null }));
       }
     }),
   );

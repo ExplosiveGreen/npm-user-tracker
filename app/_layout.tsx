@@ -39,10 +39,13 @@ export default function RootLayout() {
       console.warn('Background task registration skipped', error);
     });
     // Requeues anything a killed session left behind (stale running jobs go
-    // back to queued; the background task does the actual running).
-    recoverInterruptedScans().catch((error) => {
-      console.warn('Interrupted scan recovery skipped', error);
-    });
+    // back to queued; the background task does the actual running), then
+    // reloads collections so rows the background changed while away appear.
+    recoverInterruptedScans()
+      .then(() => refreshCollections())
+      .catch((error) => {
+        console.warn('Interrupted scan recovery skipped', error);
+      });
     // The background task writes SQLite from a runtime that shares no memory
     // with this one: reload collections every foregrounding so rows the
     // background changed (job outcomes, new packages) actually appear.
