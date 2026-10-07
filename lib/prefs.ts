@@ -13,6 +13,14 @@ function nativeDb(): SQLiteDatabase | null {
   if (Platform.OS === 'web') return null;
   if (!database) {
     database = openDatabaseSync(PREF_DB_NAME);
+    try {
+      // Same WAL rationale as db/index.ts: the headless background runtime
+      // reads/writes the pending-history queue while the foreground may too.
+      database.execSync('PRAGMA journal_mode = WAL;');
+      database.execSync('PRAGMA busy_timeout = 5000;');
+    } catch {
+      // Web fallback — see db/index.ts.
+    }
     database.execSync(
       'CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY NOT NULL, value TEXT)',
     );

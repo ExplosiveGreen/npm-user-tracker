@@ -10,7 +10,21 @@ import type { ExpoSQLiteDatabaseLike } from '@tanstack/expo-db-sqlite-persistenc
 // Local SQLite-backed persistence shared by every collection below. The database
 // is opened once and reused across the whole app runtime (and across app restarts),
 // which is what makes the data durable on-device.
+//
+// WAL + busy timeout are load-bearing, not tuning: the OS background task runs
+// the SAME collections in a headless JS runtime while the foreground UI reads
+// them. With the default rollback journal, any overlap throws SQLITE_BUSY and
+// the losing side sees an empty database (or a failed write). WAL makes reads
+// lock-free and the busy timeout turns writer collisions into brief waits.
+// Both pragmas are sticky per file, so setting them on every open is safe.
 const database = openDatabaseSync('npm-user-tracker.db');
+try {
+  database.execSync('PRAGMA journal_mode = WAL;');
+  database.execSync('PRAGMA busy_timeout = 5000;');
+} catch {
+  // Web (wa-sqlite) may not accept these — persistence still works there,
+  // just without the concurrent-runtime guarantees native needs.
+}
 
 // tanstack's Expo adapter expects `ExpoSQLiteDatabaseLike` (execAsync/getAllAsync/
 // runAsync/withExclusiveTransactionAsync/closeAsync), which expo-sqlite's
