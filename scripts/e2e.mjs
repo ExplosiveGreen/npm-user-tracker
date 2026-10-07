@@ -192,6 +192,10 @@ try {
   console.log('== Wrong username ==');
   maestro('wrong-username.yaml');
   ensureQueued('~t3dotgg');
+  // The queue check reads foreground memory, but the background task reads
+  // SQLite — give TanStack's async persistence time to flush the rows first,
+  // or the forced run sees an empty database and finishes doing nothing.
+  sleep(20000);
   forceBackgroundScan();
   maestro('wrong-username-result.yaml');
 
@@ -200,6 +204,7 @@ try {
   adb('shell', 'svc', 'data', 'disable');
   maestro('offline-add.yaml');
   ensureQueued('instafluff');
+  sleep(20000);
   forceBackgroundScan();
   maestro('offline-add-result.yaml');
 
