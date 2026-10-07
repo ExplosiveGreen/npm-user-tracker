@@ -115,13 +115,16 @@ const loadUsersByUsername = async (): Promise<Map<string, string>> => {
 // failures; schema mismatches fail immediately (retrying won't help).
 const fetchJson = (url: string, operation: string): Effect.Effect<unknown, ScanError> =>
   Effect.tryPromise({
-    try: () =>
-      fetchWithTimeout(url).then(async (response) => {
+    try: () => {
+      console.log(`[scan] fetching ${operation}`);
+      return fetchWithTimeout(url).then(async (response) => {
+        console.log(`[scan] fetched ${operation}: status ${response.status}`);
         if (!response.ok) {
           throw new Error(`status ${response.status}`);
         }
         return (await response.json()) as unknown;
-      }),
+      });
+    },
     catch: (cause) =>
       new ScanError({
         operation,
