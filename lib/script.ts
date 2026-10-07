@@ -680,6 +680,7 @@ export const scanAllEnabled = (): Promise<void> =>
         );
       }
       const enabled = npmUsersCollection.toArray.filter((user) => user.enable);
+      console.log(`[scan] sweep: ${enabled.length} enabled users`);
       yield* Effect.forEach(enabled, (user) =>
         Effect.gen(function* () {
           // Reuse a waiting job when one exists (e.g. left by a killed
